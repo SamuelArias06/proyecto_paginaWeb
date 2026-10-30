@@ -318,6 +318,12 @@ const OLE2 = Buffer.concat([
   Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
   Buffer.alloc(1024),
 ]);
+/** Cabecera JFIF: una foto de la hoja de vida, que es lo que sube media gente. */
+const JPEG_MINIMO = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]),
+  Buffer.from('JFIF\0', 'latin1'),
+  Buffer.alloc(512),
+]);
 
 async function prepararArchivos() {
   const carpeta = await mkdtemp(join(tmpdir(), 'dst-empleos-'));
@@ -338,6 +344,15 @@ async function prepararArchivos() {
     pdfFalso: ruta('disfrazado.pdf'),
     pesado: ruta('escaneo-gigante.pdf'),
     dobleExtension: ruta('hoja.exe.pdf'),
+    /*
+     * SIN EXTENSION, como lo entregan los selectores de archivos de Android:
+     * el nombre es el que muestra el proveedor (Drive, Descargas, Documentos de
+     * WhatsApp) y muchas veces no trae «.pdf». Son bytes de PDF de verdad.
+     */
+    sinExtension: ruta('hoja de vida'),
+    /** Extension equivocada, mismo caso: por dentro es un PDF. */
+    extensionAjena: ruta('hoja-de-vida-escaneada.docx'),
+    foto: ruta('hoja-de-vida.jpg'),
   };
 
   await Promise.all([
@@ -348,6 +363,9 @@ async function prepararArchivos() {
     writeFile(archivos.pdfFalso, 'MZ Esto no es un PDF, es texto plano disfrazado.\n'),
     writeFile(archivos.pesado, pdfPesado),
     writeFile(archivos.dobleExtension, PDF_MINIMO),
+    writeFile(archivos.sinExtension, PDF_MINIMO),
+    writeFile(archivos.extensionAjena, PDF_MINIMO),
+    writeFile(archivos.foto, JPEG_MINIMO),
   ]);
 
   return archivos;
@@ -518,10 +536,22 @@ async function revisarCampo(navegador, archivos, etiqueta, viewport) {
   const cuantos = () => entrada.evaluate((e) => e.files.length);
 
   comprobar(`${etiqueta}: el campo existe y es obligatorio`, (await entrada.count()) === 1 && (await entrada.getAttribute('required')) !== null);
+  /*
+   * EL `accept` LLEVA LAS EXTENSIONES Y LOS MIME. Chrome de Android traduce cada
+   * extension del `accept` a un tipo MIME y le pide al selector que esconda todo
+   * lo demas; un archivo cuyo proveedor no declara bien el tipo salia en gris o
+   * no salia, y el candidato no podia elegir su propia hoja de vida.
+   * `application/octet-stream` esta a proposito: es lo que declaran los gestores
+   * de archivos que no saben de que tipo es. El formato lo decide la validacion,
+   * no este filtro (src/lib/empleos/hoja-de-vida.ts).
+   */
+  const accept = (await entrada.getAttribute('accept')) ?? '';
   comprobar(
-    `${etiqueta}: solo acepta .pdf, .doc y .docx`,
-    (await entrada.getAttribute('accept')) === '.pdf,.doc,.docx',
-    String(await entrada.getAttribute('accept')),
+    `${etiqueta}: el accept lleva las tres extensiones, sus MIME y octet-stream`,
+    ['.pdf', '.doc', '.docx', 'application/pdf', 'application/msword', 'application/octet-stream'].every(
+      (v) => accept.split(',').includes(v),
+    ) && accept.includes('wordprocessingml.document'),
+    accept,
   );
   comprobar(
     `${etiqueta}: dice los formatos y el tope antes de elegir nada`,
@@ -564,7 +594,45 @@ async function revisarCampo(navegador, archivos, etiqueta, viewport) {
       (await cuantos()) === 1,
   );
 
+  /*
+   * ---- Los nombres que entrega el celular ----------------------------------
+   *
+   * Lo que decide es el CONTENIDO. Un PDF de verdad se acepta aunque el nombre
+   * llegue sin extension o con otra, que es como lo entregan los selectores de
+   * archivos de Android. Antes esto se rechazaba con «formato no permitido» sin
+   * llegar a mirar los bytes.
+   */
+  await entrada.setInputFiles(archivos.sinExtension);
+  await pagina.waitForTimeout(300);
+  comprobar(
+    `${etiqueta}: un PDF cuyo nombre llega SIN extension se acepta`,
+    (await archivo.isVisible()) && !(await error.isVisible()) && (await cuantos()) === 1,
+    await textoDe(error),
+  );
+
+  await entrada.setInputFiles(archivos.extensionAjena);
+  await pagina.waitForTimeout(300);
+  comprobar(
+    `${etiqueta}: un PDF con la extension equivocada se acepta`,
+    (await archivo.isVisible()) && !(await error.isVisible()) && (await cuantos()) === 1,
+    await textoDe(error),
+  );
+
   // ---- Rechazados -----------------------------------------------------------
+  await entrada.setInputFiles(archivos.foto);
+  await pagina.waitForTimeout(300);
+  comprobar(
+    `${etiqueta}: una foto se rechaza diciendo que es una foto, no un formato raro`,
+    (await error.isVisible()) &&
+      (await textoDe(error)).includes('es una foto') &&
+      (await cuantos()) === 0,
+    await textoDe(error),
+  );
+  comprobar(
+    `${etiqueta}: con el rechazo aparece la salida por WhatsApp junto al campo`,
+    await pagina.locator('[data-salida-hv]').isVisible(),
+  );
+
   await entrada.setInputFiles(archivos.texto);
   await pagina.waitForTimeout(300);
   comprobar(
@@ -609,6 +677,10 @@ async function revisarCampo(navegador, archivos, etiqueta, viewport) {
   comprobar(
     `${etiqueta}: un archivo válido después del rechazo borra el error`,
     !(await error.isVisible()) && (await cuantos()) === 1 && (await entrada.evaluate((e) => e.checkValidity())),
+  );
+  comprobar(
+    `${etiqueta}: y se lleva con él la salida por WhatsApp del campo`,
+    !(await pagina.locator('[data-salida-hv]').isVisible()),
   );
 
   // ---- Campo trampa y casilla ----------------------------------------------
@@ -1304,6 +1376,100 @@ async function envioReal(base, archivos) {
   }
 }
 
+// --- E) El navegador incrustado de otra aplicación ---------------------------
+
+/*
+ * El caso que dejó sin postularse a los candidatos: el flyer de la vacante
+ * circula por WhatsApp, el enlace se abre DENTRO de WhatsApp y ese navegador
+ * muchas veces no puede abrir el selector de archivos. Se toca «Hoja de vida» y
+ * no pasa nada; desde el PC el mismo formulario funciona.
+ *
+ * Desde la página no hay forma de forzar el selector, así que lo que se
+ * comprueba aquí es que el aviso con las salidas aparezca cuando el UA delata un
+ * navegador incrustado, y que NO aparezca en un navegador normal (ver
+ * src/lib/navegador-incrustado.ts).
+ */
+const UA_WHATSAPP =
+  'Mozilla/5.0 (Linux; Android 13; SM-A135M Build/TP1A.220624.014; wv) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Version/4.0 Chrome/119.0.6045.193 Mobile Safari/537.36';
+const UA_INSTAGRAM =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Mobile/15E148 Instagram 302.0.0.23.113 (iPhone13,2; iOS 17_1_1; es_CO)';
+const UA_CHROME_ANDROID =
+  'Mozilla/5.0 (Linux; Android 13; SM-A135M) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/119.0.0.0 Mobile Safari/537.36';
+
+async function revisarNavegadorIncrustado(navegador, archivos) {
+  console.log('\n=== E) Navegador incrustado (WhatsApp, Instagram) ===\n');
+  const viewport = { width: 375, height: 720 };
+
+  // 1) El WebView de WhatsApp: el aviso sale, con el enlace a Chrome.
+  const enWhatsapp = await navegador.newContext({ viewport, userAgent: UA_WHATSAPP });
+  {
+    const { pagina } = await abrir(enWhatsapp, {});
+    const aviso = pagina.locator('[data-aviso-webview]');
+    comprobar('WhatsApp: el aviso de que el selector puede no abrir está a la vista', await aviso.isVisible());
+    comprobar(
+      'WhatsApp: en Android se ofrece abrir la página en Chrome con un intent://',
+      (await pagina.locator('[data-abrir-chrome]').isVisible()) &&
+        ((await pagina.locator('[data-abrir-chrome]').getAttribute('href')) ?? '').startsWith(
+          'intent://',
+        ),
+      (await pagina.locator('[data-abrir-chrome]').getAttribute('href')) ?? '',
+    );
+    comprobar(
+      'WhatsApp: el aviso ofrece también copiar el enlace y mandarla por WhatsApp',
+      (await pagina.locator('[data-copiar-enlace]').isVisible()) &&
+        (await textoDe(aviso)).includes('WhatsApp'),
+    );
+
+    /*
+     * Y EN CUANTO HAY ARCHIVO, EL AVISO SE VA. Dentro de un WebView que SÍ abre
+     * el selector (los hay), el aviso no se puede quedar contradiciendo lo que
+     * la persona acaba de conseguir.
+     */
+    await pagina.setInputFiles('#hoja-de-vida-empleo', archivos.pdfValido);
+    await pagina.waitForTimeout(300);
+    comprobar(
+      'WhatsApp: adjuntada la hoja de vida, el aviso desaparece',
+      !(await aviso.isVisible()),
+    );
+    await pagina.close();
+  }
+  await enWhatsapp.close();
+
+  // 2) Instagram en iOS: el aviso nombra la aplicación, y no hay intent://.
+  const enInstagram = await navegador.newContext({ viewport, userAgent: UA_INSTAGRAM });
+  {
+    const { pagina } = await abrir(enInstagram, {});
+    const aviso = pagina.locator('[data-aviso-webview]');
+    comprobar('Instagram: el aviso está a la vista', await aviso.isVisible());
+    comprobar(
+      'Instagram: el aviso dice dentro de QUÉ aplicación está la página',
+      (await textoDe(aviso)).includes('Instagram'),
+      await textoDe(aviso),
+    );
+    comprobar(
+      'Instagram: en iOS no se ofrece el intent:// de Android',
+      !(await pagina.locator('[data-abrir-chrome]').isVisible()),
+    );
+    await pagina.close();
+  }
+  await enInstagram.close();
+
+  // 3) Chrome de Android, que es un navegador de verdad: nada que avisar.
+  const enChrome = await navegador.newContext({ viewport, userAgent: UA_CHROME_ANDROID });
+  {
+    const { pagina } = await abrir(enChrome, {});
+    comprobar(
+      'Chrome de Android: NO se enseña ningún aviso (no es un navegador incrustado)',
+      !(await pagina.locator('[data-aviso-webview]').isVisible()),
+    );
+    await pagina.close();
+  }
+  await enChrome.close();
+}
+
 // --- Ejecución --------------------------------------------------------------
 
 const archivos = await prepararArchivos();
@@ -1323,6 +1489,7 @@ if (!process.argv.includes('--solo-api')) {
     await revisarCargo(navegador);
     // Turnstile, en móvil: es donde vive el WebView de WhatsApp.
     await revisarTurnstile(navegador, archivos, 'Móvil', { width: 375, height: 720 });
+    await revisarNavegadorIncrustado(navegador, archivos);
   } finally {
     await navegador.close();
     servidor.close();

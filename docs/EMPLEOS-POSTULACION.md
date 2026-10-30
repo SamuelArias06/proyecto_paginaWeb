@@ -45,7 +45,7 @@ Humano con los datos en el cuerpo y el archivo adjunto.
 | Clave de Resend | `RESEND_API_KEY`, de la cuenta de Resend de Empleos (distinta de la de PQRS) |
 | Asunto | `Postulación: {cargo} – {nombre}` |
 | Responder desde la bandeja | Va al candidato (`replyTo`) |
-| Hoja de vida | **Obligatoria**, PDF, DOC o DOCX, **máximo 4 MB**, adjunta al correo |
+| Hoja de vida | **Obligatoria**, PDF, DOC o DOCX, **máximo 3 MB**, adjunta al correo |
 | Dónde se guarda el archivo | **En ningún sitio**: vive en la memoria de la función lo que dura la petición |
 | Antispam | Campo trampa (honeypot) + límite por IP (5 cada 10 min) + Turnstile |
 | Autorización Ley 1581 | Casilla obligatoria, validada también en el servidor |
@@ -160,18 +160,86 @@ segundo correo solo llenaría su bandeja. La confirmación es la pantalla.
 ## La hoja de vida se revisa dos veces
 
 `src/lib/empleos/hoja-de-vida.ts` no toca el DOM ni el entorno, y lo importan el
-navegador y el servidor sin cambiar una línea. Restringe la lista de extensiones
-a `.pdf`, `.doc` y `.docx` y delega en `validarArchivo` de `src/lib/adjuntos.ts`:
-peso, doble extensión (`hoja.exe.pdf`), saneado del nombre y **bytes mágicos**
-(`%PDF`, contenedor OLE2 para `.doc`, ZIP con carpeta `word/` para `.docx`).
+navegador y el servidor sin cambiar una línea. Delega en `validarArchivo` de
+`src/lib/adjuntos.ts`: peso, doble extensión (`hoja.exe.pdf`), saneado del
+nombre y **bytes mágicos** (`%PDF`, contenedor OLE2 para `.doc`, ZIP con carpeta
+`word/` para `.docx`).
+
+**Decide el contenido, no el nombre** (`confiarEnElContenido`, 30·10·2026). Si
+los bytes son de un PDF, DOC o DOCX, el archivo se acepta aunque el nombre llegue
+sin extensión o con otra, y se le pone la que le corresponde —que es la que
+viaja al adjunto del correo y a Control360—. Antes la extensión del nombre se
+comprobaba PRIMERO y un nombre sin extensión se rechazaba con «formato no
+permitido» sin llegar a mirar los bytes: ver más abajo [Por qué desde el celular
+no se podía adjuntar](#por-qué-desde-el-celular-no-se-podía-adjuntar). No se
+pierde nada de seguridad, porque lo que se exigía de verdad era el contenido y se
+sigue exigiendo; la doble extensión sospechosa se sigue rechazando por el nombre.
+Los soportes de PQRS NO llevan esa opción: allí nombre y contenido tienen que
+coincidir.
 
 - En el navegador (`src/components/FormularioEmpleo.astro`), al elegir el archivo:
   el rechazado se saca del input, se explica por qué, y el motivo queda como
   validez personalizada del campo para que `reportValidity()` frene el envío con
   ese mensaje. El aceptado se enseña con su nombre y su peso. El texto de ayuda
-  dice el tope **antes** de elegir: «PDF, DOC o DOCX, máximo 4 MB.».
+  dice el tope **antes** de elegir: «PDF, DOC o DOCX, máximo 3 MB.».
 - En el servidor, sobre los bytes recibidos. La validación del navegador se
   salta con las DevTools abiertas; la que vale es esta.
+
+## Por qué desde el celular no se podía adjuntar
+
+El 30 de octubre de 2026 nos reportaron que **los candidatos no podían subir su
+hoja de vida desde ningún teléfono**, y que desde el PC el mismo formulario
+funcionaba. Dos personas lo intentaron ese día y ninguna lo consiguió. Las
+postulaciones que no llegan a enviarse no dejan rastro en los registros de Vercel
+—se caen en el navegador, antes del `fetch`—, así que el diagnóstico salió de
+mirar qué hace distinto un teléfono. Son tres cosas, y estaban las tres:
+
+1. **El navegador de WhatsApp no abre el selector de archivos.** Las vacantes
+   circulan por WhatsApp: el flyer con el enlace, el candidato lo abre DENTRO de
+   WhatsApp. Eso no es Chrome, es un WebView, y un WebView solo abre el selector
+   si la aplicación anfitriona implementó `onShowFileChooser`. Varias no lo
+   hacen: se toca «Hoja de vida» y **no pasa nada**. Ni selector, ni error.
+   Desde la página no hay forma de forzarlo, así que lo que se hace es avisar y
+   dar salida: `src/lib/navegador-incrustado.ts` detecta el WebView por el
+   `User-Agent` (en Android, el token `wv`, que es lo único que delata a
+   WhatsApp; las demás aplicaciones se firman con su nombre) y el formulario
+   enseña una franja con «Abrir en Chrome» (un enlace `intent://`, solo en
+   Android), «Copiar el enlace» y «Mandarla por WhatsApp». El aviso se va solo en
+   cuanto hay un archivo adjunto. Hay además una red por si el `User-Agent` no
+   delata nada: si al tocar el campo la página sigue delante y sin archivo
+   pasados 3 segundos, el selector no abrió y sale la misma franja (solo con
+   pantalla táctil; en el PC el diálogo no siempre cambia la visibilidad).
+2. **El nombre que entrega el selector de Android no trae extensión.** El nombre
+   lo pone el proveedor del archivo (Drive, Descargas, Documentos de WhatsApp,
+   Gmail) y muchas veces es «Documento» o «hoja de vida» a secas. Con la
+   extensión decidiendo primero, eso era «formato no permitido» para un PDF
+   perfectamente válido. Ahora manda el contenido (sección anterior).
+3. **El `accept` escondía el archivo en el selector.** Chrome de Android traduce
+   cada extensión del `accept` a un tipo MIME y le pide al selector que oculte
+   todo lo demás; un archivo cuyo proveedor no declara bien el tipo salía en
+   gris o no salía. El `accept` lleva ahora las extensiones **y** sus MIME **y**
+   `application/octet-stream`, que es lo que declaran los gestores de archivos
+   que no saben de qué tipo es. Es solo un filtro de comodidad: quien decide si
+   vale es la validación, en el navegador y otra vez en el servidor.
+
+Dos dead ends más que se cerraron con esto, porque la persona se quedaba sin
+saber qué pasaba:
+
+- **Leer el archivo puede fallar** (uno de Drive que no está descargado, uno que
+  la aplicación de origen movió). La excepción subía sin que nadie la atendiera:
+  no se pintaba ni el nombre ni un error. Ahora se explica y se pide descargarlo
+  al teléfono.
+- **Sin hoja de vida, el motivo se escribe en la página**, no solo en la burbuja
+  de `reportValidity()`: en el celular esa burbuja se va en dos segundos, o no se
+  pinta, o queda fuera de la pantalla, y se pulsa «Enviar postulación» y
+  aparentemente no pasa nada.
+- **Con el archivo rechazado aparece la salida por WhatsApp junto al campo.**
+  Antes solo estaba abajo, en el aviso de error del envío, y a ese aviso no llega
+  quien no consigue pasar del campo.
+
+Lo que **no** cambió: una hoja de vida sigue siendo un documento, no una foto. Un
+JPG o un PNG se rechazan, pero el mensaje ya dice «es una foto, no un documento»
+y cómo arreglarlo, en vez de hablar de formatos no permitidos.
 
 ## Seguridad
 
@@ -490,7 +558,8 @@ huella no se guarda en ningún sitio ni viaja al navegador o al correo.
 ```
 src/lib/empleos/vacantes-fuente.ts vacantes: Control360 en el build, src/data/vacantes.ts si falla
 src/lib/empleos/cargos.ts          lista de cargos admitidos (vacantes + espontánea)
-src/lib/empleos/hoja-de-vida.ts    formatos, tope de 4 MB y validación (navegador y servidor)
+src/lib/empleos/hoja-de-vida.ts    formatos, tope de 3 MB y validación (navegador y servidor)
+src/lib/navegador-incrustado.ts    detecta el WebView de WhatsApp/Instagram, donde el selector no abre
 src/lib/empleos/config.ts          destino, remitente, los tres límites y el campo trampa
 src/lib/empleos/postulacion.ts     validación del multipart, con todos los errores a la vez
 src/lib/empleos/correo.ts          el correo, con reintentos, [SIN VERIFICAR] y variante con enlace
@@ -555,13 +624,28 @@ escrito llega escapado; que `EMPLEOS_DESTINO` y `EMPLEOS_REMITENTE` mandan si
 están, y que `EMPLEOS_REMITENTE` **ya no** hereda el de PQRS; que se aceptan `.pdf`,
 `.doc` y `.docx` mirando los bytes y no el MIME declarado; que se rechazan el
 archivo ausente o vacío, un `.txt`, una imagen o texto plano disfrazados de PDF,
-un ZIP renombrado a `.docx`, la doble extensión y más de 4 MB; que los campos
+un ZIP renombrado a `.docx`, la doble extensión y más de 3 MB; que un PDF cuyo
+nombre llega **sin extensión o con otra** —como lo entregan los selectores de
+archivos de Android— se acepta y sale con la extensión de su contenido; que los campos
 devuelven **todos** los errores a la vez sin gastar token; que el campo trampa
 relleno da `200` sin correo ni red; los tres límites por IP (con y sin Upstash, y
 el estrecho de las no verificadas); que dos hojas de vida distintas desde la misma
 IP no se estorban; que Turnstile falla cerrado; que la marca `sin_verificar` se
 ignora si viene un token; que un fallo de Resend se reintenta tres veces y que el
 segundo intento, si sale, basta.
+
+`src/lib/navegador-incrustado.test.ts` prueba la detección del WebView con
+`User-Agent` reales de los dos lados: que se avisa dentro del navegador de
+WhatsApp (que solo se delata por el token `wv`), de Instagram, de Facebook y de
+TikTok, y que **no** se avisa en Chrome de Android, Samsung Internet, Firefox,
+Safari de iPhone ni Chrome de escritorio. Los dos lados cuestan: no avisar deja
+al candidato tocando un campo que no hace nada, y avisar de más ensucia el
+formulario.
+
+`npm run verificar:empleos` abre además la página con esos mismos `User-Agent`
+(sección E) y comprueba que la franja sale con sus tres salidas, que el enlace
+`intent://` solo aparece en Android, que el aviso nombra la aplicación cuando se
+sabe cuál es, y que desaparece en cuanto hay una hoja de vida adjunta.
 
 `src/lib/empleos/respaldo.test.ts` cubre la red de seguridad con el Blob
 simulado: que un fallo de correo acaba en `200` y no en `500`, que la hoja de

@@ -365,6 +365,60 @@ describe('formatos de la hoja de vida', () => {
   });
 });
 
+/*
+ * LOS NOMBRES QUE ENTREGA EL CELULAR. El selector de archivos de Android da el
+ * nombre que muestra el proveedor (Drive, Descargas, Documentos de WhatsApp), y
+ * muchas veces llega sin extensión o con otra. Antes eso se rechazaba con
+ * «formato no permitido» sin llegar a mirar los bytes, y era por lo que los
+ * candidatos no podían adjuntar su hoja de vida desde el teléfono. Manda el
+ * contenido: ver src/lib/empleos/hoja-de-vida.ts.
+ */
+describe('nombres de archivo del celular', () => {
+  it('un PDF cuyo nombre llega SIN extensión se acepta, y el adjunto sale .pdf', async () => {
+    const respuesta = await atenderPostulacion(
+      peticion(campos(), { nombre: 'hoja de vida', bytes: PDF_MINIMO }),
+      ENTORNO,
+    );
+    expect(respuesta.estado).toBe(200);
+    expect(adjuntos()[0]!.contentType).toBe('application/pdf');
+    expect(adjuntos()[0]!.filename).toBe('hoja_de_vida.pdf');
+  });
+
+  it('un PDF con la extensión equivocada se acepta y se le corrige', async () => {
+    const respuesta = await atenderPostulacion(
+      peticion(campos(), { nombre: 'cv.docx', bytes: PDF_MINIMO }),
+      ENTORNO,
+    );
+    expect(respuesta.estado).toBe(200);
+    expect(adjuntos()[0]!.contentType).toBe('application/pdf');
+    expect(adjuntos()[0]!.filename).toBe('cv.pdf');
+  });
+
+  it('un DOCX cuyo nombre llega sin extensión se acepta como .docx', async () => {
+    const respuesta = await atenderPostulacion(
+      peticion(campos(), { nombre: 'Documento', bytes: DOCX }),
+      ENTORNO,
+    );
+    expect(respuesta.estado).toBe(200);
+    expect(adjuntos()[0]!.filename).toBe('Documento.docx');
+  });
+
+  /*
+   * Confiar en el contenido no deja pasar nombres peligrosos: la extensión del
+   * nombre se SUSTITUYE por la del contenido, así que lo que se adjunta nunca
+   * se llama `.exe`. Y la doble extensión (`cv.exe.pdf`) sigue rechazándose
+   * antes de leer un solo byte, en el test de más abajo.
+   */
+  it('un nombre con extensión ejecutable sale con la extensión del contenido', async () => {
+    const respuesta = await atenderPostulacion(
+      peticion(campos(), { nombre: 'cv.exe', bytes: PDF_MINIMO }),
+      ENTORNO,
+    );
+    expect(respuesta.estado).toBe(200);
+    expect(adjuntos()[0]!.filename).toBe('cv.pdf');
+  });
+});
+
 // --- Archivos rechazados -----------------------------------------------------
 
 describe('hoja de vida rechazada', () => {
@@ -395,7 +449,7 @@ describe('hoja de vida rechazada', () => {
     expect(errores(respuesta).join(' ')).toContain('PDF, DOC o DOCX');
   });
 
-  it('una imagen renombrada a .pdf → 400', async () => {
+  it('una foto renombrada a .pdf → 400, y el mensaje dice que es una foto', async () => {
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
       'base64',
@@ -405,7 +459,7 @@ describe('hoja de vida rechazada', () => {
       ENTORNO,
     );
     expect(respuesta.estado).toBe(400);
-    expect(errores(respuesta).join(' ')).toContain('no corresponde a la extensión .pdf');
+    expect(errores(respuesta).join(' ')).toContain('es una foto, no un documento');
   });
 
   it('texto plano disfrazado de .pdf → 400', async () => {
@@ -423,7 +477,7 @@ describe('hoja de vida rechazada', () => {
       ENTORNO,
     );
     expect(respuesta.estado).toBe(400);
-    expect(errores(respuesta).join(' ')).toContain('no corresponde a la extensión .docx');
+    expect(errores(respuesta).join(' ')).toContain('el contenido no es PDF, DOC o DOCX');
   });
 
   it('doble extensión sospechosa → 400', async () => {

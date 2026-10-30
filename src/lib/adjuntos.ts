@@ -43,6 +43,29 @@ export const EXTENSION_A_MIME: Readonly<Record<string, string>> = {
   '.png': 'image/png',
 };
 
+/**
+ * El camino inverso: del contenido detectado a la extensión que le corresponde.
+ *
+ * Hace falta porque el nombre del archivo NO siempre trae una extensión
+ * utilizable. Los selectores de archivos de Android devuelven el nombre que
+ * muestra el proveedor (Drive, Descargas, Documentos de WhatsApp), y muchos lo
+ * dan sin extensión o con otra; en el PC eso no pasa casi nunca. Con este mapa,
+ * `validarArchivo` puede corregir la extensión a partir del contenido en vez de
+ * rechazar un PDF de verdad por cómo lo nombró el teléfono (ver
+ * `confiarEnElContenido`).
+ *
+ * El primer par gana: `.jpg` antes que `.jpeg` para `image/jpeg`.
+ */
+export const MIME_A_EXTENSION: Readonly<Record<string, string>> = Object.freeze(
+  Object.entries(EXTENSION_A_MIME).reduce<Record<string, string>>((mapa, [extension, mime]) => {
+    if (!(mime in mapa)) mapa[mime] = extension;
+    return mapa;
+  }, {}),
+);
+
+/** MIME de imagen, para distinguir «subió una foto» de «subió cualquier cosa». */
+const MIMES_DE_IMAGEN: readonly string[] = ['image/jpeg', 'image/png'];
+
 /** Valor del atributo `accept` del <input type="file">. */
 export const ACEPTA = Object.keys(EXTENSION_A_MIME).join(',');
 
@@ -77,6 +100,28 @@ export interface ArchivoAValidar {
 export interface OpcionesValidacion {
   /** Tamaño máximo por archivo, en MB. */
   maxMb?: number;
+  /**
+   * Qué puede ser el CONTENIDO del archivo. Por defecto, cualquiera de los
+   * tipos de `EXTENSION_A_MIME`. El campo de hoja de vida lo acota a documentos
+   * (ver src/lib/empleos/hoja-de-vida.ts).
+   */
+  mimesPermitidos?: readonly string[];
+  /** Lista legible de formatos para los mensajes de error. */
+  formatosLegibles?: string;
+  /**
+   * MANDA EL CONTENIDO, NO EL NOMBRE.
+   *
+   * Con esto puesto, un archivo cuyo contenido es de un tipo permitido se
+   * acepta aunque el nombre venga sin extensión o con otra, y la extensión que
+   * se devuelve es la del contenido. Sin esto (lo que siguen haciendo los
+   * soportes de PQRS), nombre y contenido tienen que coincidir.
+   *
+   * Existe por el celular: los selectores de Android entregan el nombre que
+   * muestra el proveedor del archivo, y muchas veces es «Documento» o
+   * «hoja de vida» a secas. Rechazar eso por «formato no permitido» echaba
+   * atrás a candidatos con un PDF perfectamente válido en la mano.
+   */
+  confiarEnElContenido?: boolean;
 }
 
 export type ResultadoValidacion =
@@ -262,6 +307,8 @@ export async function validarArchivo(
 ): Promise<ResultadoValidacion> {
   const maxMb = opciones.maxMb ?? MAX_MB_POR_DEFECTO;
   const maxBytes = maxMb * 1024 * 1024;
+  const formatos = opciones.formatosLegibles ?? FORMATOS_LEGIBLES;
+  const permitidos = opciones.mimesPermitidos ?? Object.values(EXTENSION_A_MIME);
   const nombreSeguro = sanitizarNombre(archivo.nombre);
   // En los mensajes va el nombre que la persona reconoce, con sus tildes; en el
   // resultado va el saneado, que es el que se guardaría en base de datos.
@@ -287,10 +334,13 @@ export async function validarArchivo(
 
   const extension = extensionDe(nombreSeguro);
   const mimeEsperado = EXTENSION_A_MIME[extension];
-  if (!mimeEsperado) {
+  // Sin `confiarEnElContenido`, un nombre sin extensión conocida se corta aquí y
+  // no se leen los bytes. Con él, la extensión no decide nada todavía: puede
+  // faltar, y lo único que importa es lo que haya dentro.
+  if (!mimeEsperado && !opciones.confiarEnElContenido) {
     return {
       ok: false,
-      error: `${visible}: formato no permitido. Solo aceptamos ${FORMATOS_LEGIBLES}.`,
+      error: `${visible}: formato no permitido. Solo aceptamos ${formatos}.`,
     };
   }
 
@@ -298,18 +348,74 @@ export async function validarArchivo(
   if (mimeReal === null) {
     return {
       ok: false,
-      error: `${visible}: no reconocemos el contenido del archivo. Vuelve a guardarlo como ${FORMATOS_LEGIBLES}.`,
+      error: `${visible}: no reconocemos el contenido del archivo. Vuelve a guardarlo como ${formatos}.`,
     };
   }
 
-  if (mimeReal !== mimeEsperado) {
-    return {
-      ok: false,
-      error: `${visible}: el contenido no corresponde a la extensión ${extension}. Guárdalo de nuevo en el formato correcto.`,
-    };
+  /*
+   * MODO ESTRICTO (el de los soportes de PQRS): nombre y contenido tienen que
+   * decir lo mismo. Se comprueba ANTES que la lista de tipos admitidos para que
+   * el mensaje siga siendo el que ya decía —«el contenido no corresponde a la
+   * extensión .docx»—, que para un archivo con nombre y extensión de verdad es
+   * más útil que hablar de la lista de formatos.
+   */
+  if (!opciones.confiarEnElContenido) {
+    if (mimeReal !== mimeEsperado) {
+      return {
+        ok: false,
+        error: `${visible}: el contenido no corresponde a la extensión ${extension}. Guárdalo de nuevo en el formato correcto.`,
+      };
+    }
+    if (!permitidos.includes(mimeReal)) {
+      return { ok: false, error: noAdmitido(visible, mimeReal, formatos) };
+    }
+    return { ok: true, mime: mimeEsperado, extension, nombreSeguro };
   }
 
-  return { ok: true, mime: mimeEsperado, extension, nombreSeguro };
+  /*
+   * MANDA EL CONTENIDO. Aquí la extensión del nombre no ha decidido nada, así
+   * que lo único que puede descartar el archivo es lo que haya dentro.
+   */
+  if (!permitidos.includes(mimeReal)) {
+    return { ok: false, error: noAdmitido(visible, mimeReal, formatos) };
+  }
+
+  /*
+   * Vale. La extensión con la que sigue viaje es la del CONTENIDO: así el
+   * adjunto del correo y el archivo que llega a Control360 se abren con el
+   * programa correcto aunque el teléfono haya entregado el nombre sin extensión
+   * o con otra. Se conserva la que ya traía cuando corresponde al mismo tipo
+   * (un «.jpeg» no se vuelve «.jpg» por gusto).
+   */
+  const extensionFinal =
+    mimeEsperado === mimeReal ? extension : (MIME_A_EXTENSION[mimeReal] as string);
+  return {
+    ok: true,
+    mime: mimeReal,
+    extension: extensionFinal,
+    nombreSeguro: conExtension(nombreSeguro, extensionFinal),
+  };
+}
+
+/**
+ * El contenido es de un tipo que este campo no admite.
+ *
+ * Se dice QUÉ subió, porque es lo único que le permite arreglarlo: «formato no
+ * permitido» a secas no explica nada a quien acaba de elegir un archivo que se
+ * llama «hoja de vida» y es la foto de una hoja de vida.
+ */
+function noAdmitido(visible: string, mimeReal: string, formatos: string): string {
+  if (MIMES_DE_IMAGEN.includes(mimeReal)) {
+    return `${visible}: es una foto, no un documento. Solo aceptamos ${formatos}; si solo lo tienes en fotos, pásalas a PDF antes de subirlo.`;
+  }
+  return `${visible}: el contenido no es ${formatos}. Guárdalo de nuevo en el formato correcto.`;
+}
+
+/** El mismo nombre, con la extensión `extension` en lugar de la que tuviera. */
+export function conExtension(nombre: string, extension: string): string {
+  const actual = extensionDe(nombre);
+  const cuerpo = actual ? nombre.slice(0, -actual.length) : nombre;
+  return `${cuerpo || 'archivo'}${extension}`;
 }
 
 // --- Puentes con cada entorno ----------------------------------------------

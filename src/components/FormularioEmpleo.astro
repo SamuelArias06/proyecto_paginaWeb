@@ -259,6 +259,70 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       data-error-hv
     >
     </p>
+
+    {/*
+      CUANDO EL ARCHIVO SE RECHAZA, LA SALIDA POR WHATSAPP APARECE AQUÍ MISMO.
+      Antes solo estaba abajo, dentro del aviso de error del envío, y a ese
+      aviso no llega quien no consigue pasar de este campo: se quedaba mirando
+      un «formato no permitido» sin ninguna otra puerta. Oculto mientras no haya
+      rechazo, para que el camino normal siga siendo el envío por la página.
+    */}
+    <p class="mt-2 mb-0 hidden text-[13.5px] text-muted" data-salida-hv>
+      Si no lo logras, mándanos tu hoja de vida por{' '}
+      <a class="font-semibold text-secondary-dark underline" href={enlaceWhatsapp} target="_blank" rel="noopener">
+        WhatsApp
+      </a>{' '}
+      y la registramos nosotros.
+    </p>
+
+    {/*
+      AVISO DEL NAVEGADOR INCRUSTADO (src/lib/navegador-incrustado.ts).
+
+      Las vacantes se comparten por WhatsApp, el candidato abre el enlace DENTRO
+      de WhatsApp y ese navegador muchas veces no puede abrir el selector de
+      archivos: toca «Hoja de vida» y no pasa nada. Desde la página no hay forma
+      de forzarlo, así que lo que se hace es decírselo y darle la salida: abrir
+      la página en Chrome (en Android, con un enlace `intent://`), copiar el
+      enlace, o mandar la hoja de vida por WhatsApp.
+
+      Lo enseña el script de abajo, por `User-Agent` o porque el selector no
+      llegó a abrirse; y lo oculta en cuanto hay un archivo adjunto.
+    */}
+    <div
+      class="mt-3 hidden rounded-xl border border-secondary/30 bg-secondary-soft px-4 py-3 text-[14px] text-ink"
+      data-aviso-webview
+      role="status"
+    >
+      <p class="m-0 mb-2 font-semibold">
+        Si no se abre el selector de archivos, no es tu teléfono.
+      </p>
+      <p class="m-0 mb-3" data-aviso-webview-texto>
+        Estás viendo esta página dentro de otra aplicación, y algunas no permiten adjuntar
+        archivos. Ábrela en tu navegador (Chrome o Safari) y podrás subir tu hoja de vida.
+      </p>
+      <span class="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <a class="hidden font-semibold text-secondary-dark underline" data-abrir-chrome>
+          Abrir en Chrome
+        </a>
+        <button
+          type="button"
+          class="font-semibold text-secondary-dark underline"
+          data-copiar-enlace
+        >
+          Copiar el enlace
+        </button>
+        <a
+          class="font-semibold text-secondary-dark underline"
+          href={enlaceWhatsapp}
+          target="_blank"
+          rel="noopener"
+        >
+          Mandarla por WhatsApp
+        </a>
+        <span class="hidden text-[13px] text-muted" data-copiado role="status" aria-live="polite"
+        ></span>
+      </span>
+    </div>
   </div>
 
   {/*
@@ -448,6 +512,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
   import { formatearTamano, nombreParaMostrar } from '../lib/adjuntos';
   import { registrarEvento } from '../lib/analitica';
   import { validarFileHojaDeVida } from '../lib/empleos/hoja-de-vida';
+  import { enlaceAbrirEnChrome, navegadorIncrustado } from '../lib/navegador-incrustado';
   import { LIMITES, PREFIJO_CAMPO, nombreCampo, type PreguntaVacante } from '../lib/empleos/preguntas';
   import { limpiarMunicipio, preguntasConTraslado } from '../lib/empleos/ubicacion';
   import { ruta } from '../lib/rutas';
@@ -471,6 +536,8 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
     const nombreArchivo = form.querySelector<HTMLElement>('[data-archivo-nombre]');
     const pesoArchivo = form.querySelector<HTMLElement>('[data-archivo-peso]');
     const errorArchivo = form.querySelector<HTMLElement>('[data-error-hv]');
+    const salidaArchivo = form.querySelector<HTMLElement>('[data-salida-hv]');
+    const avisoWebview = form.querySelector<HTMLElement>('[data-aviso-webview]');
     const cajaTurnstile = form.querySelector<HTMLElement>('[data-turnstile-empleo]');
     const cajaErrores = form.querySelector<HTMLElement>('[data-errores-empleo]');
     const listaErrores = form.querySelector<HTMLUListElement>('[data-lista-errores-empleo]');
@@ -687,10 +754,15 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
      * Enseña el motivo del rechazo y lo deja también como validez personalizada
      * del input: así `reportValidity()` frena el envío con NUESTRO mensaje y no
      * con el genérico de "selecciona un archivo".
+     *
+     * Con el motivo aparece la salida por WhatsApp (`data-salida-hv`): quien no
+     * consigue pasar de este campo nunca llega al aviso de error del envío, que
+     * es donde estaba la única alternativa.
      */
     function avisarArchivo(mensaje: string) {
       errorArchivo!.textContent = mensaje;
       errorArchivo!.classList.toggle('hidden', mensaje === '');
+      salidaArchivo?.classList.toggle('hidden', mensaje === '');
       entrada!.setAttribute('aria-invalid', mensaje === '' ? 'false' : 'true');
       entrada!.setCustomValidity(mensaje);
     }
@@ -704,11 +776,30 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
         return;
       }
 
+      // El selector SÍ funcionó: el aviso del navegador incrustado, si estaba
+      // puesto, ya no viene al caso.
+      ocultarAvisoWebview();
+
       // Mientras se leen las firmas el envío queda bloqueado.
       entrada!.setCustomValidity('Estamos revisando el archivo, espera un momento.');
       let veredicto;
       try {
         veredicto = await validarFileHojaDeVida(archivo);
+      } catch (fallo) {
+        /*
+         * LEER EL ARCHIVO FALLÓ, y en el celular eso pasa de verdad: un archivo
+         * de Drive que no está descargado, uno que la aplicación de origen
+         * movió, un permiso que el navegador no tiene. Antes la excepción subía
+         * sin que nadie la atendiera: no se pintaba ni el nombre ni un error, y
+         * la persona se quedaba sin saber si su hoja de vida estaba puesta.
+         */
+        console.warn('[empleos] no se pudo leer la hoja de vida:', fallo);
+        entrada!.value = '';
+        mostrarArchivo(null);
+        avisarArchivo(
+          'No pudimos leer ese archivo. Si lo tienes en Drive o en otra aplicación, descárgalo al teléfono y vuelve a elegirlo.',
+        );
+        return;
       } finally {
         entrada!.setCustomValidity('');
       }
@@ -724,6 +815,88 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       avisarArchivo('');
       mostrarArchivo(archivo);
     });
+
+    // --- Cuando el selector de archivos no abre -------------------------------
+    //
+    // Ver src/lib/navegador-incrustado.ts: dentro del navegador de WhatsApp o de
+    // Instagram el `<input type="file">` puede no hacer absolutamente nada al
+    // tocarlo, y desde la página no hay manera de forzarlo. Lo que sí se puede
+    // es avisar y dar la salida.
+
+    const enlaceChrome = avisoWebview?.querySelector<HTMLAnchorElement>('[data-abrir-chrome]');
+    const botonCopiar = avisoWebview?.querySelector<HTMLButtonElement>('[data-copiar-enlace]');
+    const avisoCopiado = avisoWebview?.querySelector<HTMLElement>('[data-copiado]');
+
+    function mostrarAvisoWebview(aplicacion: string | null) {
+      if (!avisoWebview || !avisoWebview.classList.contains('hidden')) return;
+      if (aplicacion) {
+        const texto = avisoWebview.querySelector<HTMLElement>('[data-aviso-webview-texto]');
+        if (texto) {
+          texto.textContent = `Estás viendo esta página dentro de ${aplicacion}, y ese navegador no siempre permite adjuntar archivos. Ábrela en Chrome o Safari y podrás subir tu hoja de vida.`;
+        }
+      }
+      avisoWebview.classList.remove('hidden');
+    }
+
+    function ocultarAvisoWebview() {
+      avisoWebview?.classList.add('hidden');
+    }
+
+    const incrustado = navegadorIncrustado(navigator.userAgent);
+    if (incrustado) {
+      if (incrustado.esAndroid && enlaceChrome) {
+        enlaceChrome.href = enlaceAbrirEnChrome(window.location.href);
+        enlaceChrome.classList.remove('hidden');
+      }
+      mostrarAvisoWebview(incrustado.aplicacion);
+    }
+
+    botonCopiar?.addEventListener('click', async () => {
+      const decir = (texto: string) => {
+        if (!avisoCopiado) return;
+        avisoCopiado.textContent = texto;
+        avisoCopiado.classList.remove('hidden');
+      };
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        decir('Enlace copiado: pégalo en Chrome o Safari.');
+      } catch {
+        // Sin permiso de portapapeles (o sin API) queda el enlace a la vista
+        // para copiarlo a mano, que es lo que se puede hacer en un WebView.
+        decir(window.location.href);
+      }
+    });
+
+    /*
+     * EL SELECTOR NO SE ABRIÓ. Esto pilla los WebView que el `User-Agent` no
+     * delata: al tocar el campo, un navegador que abre el selector pierde el
+     * foco o deja la página en segundo plano, siempre. Si pasados unos segundos
+     * la página sigue delante y el campo sigue vacío, el selector no abrió.
+     *
+     * Solo con pantalla táctil: en el PC el diálogo de archivos no siempre
+     * cambia la visibilidad de la página, y allí este problema no existe.
+     *
+     * Equivocarse sale barato: lo que aparece es un aviso con alternativas, y se
+     * va solo en cuanto llega un archivo.
+     */
+    const esTactil = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    if (esTactil) {
+      let vigilante: number | undefined;
+      const cancelar = () => clearTimeout(vigilante);
+
+      entrada.addEventListener('click', () => {
+        cancelar();
+        vigilante = window.setTimeout(() => {
+          if ((entrada!.files?.length ?? 0) === 0 && document.visibilityState === 'visible') {
+            mostrarAvisoWebview(incrustado?.aplicacion ?? null);
+          }
+        }, 3000);
+      });
+      entrada.addEventListener('change', cancelar);
+      entrada.addEventListener('cancel', cancelar);
+      window.addEventListener('blur', cancelar);
+      document.addEventListener('visibilitychange', cancelar);
+    }
 
     // --- Turnstile ------------------------------------------------------------
 
@@ -892,6 +1065,19 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       // traslado tiene que estar pintada antes de comprobar las obligatorias.
       clearTimeout(pausaMunicipio);
       pintarPreguntas();
+
+      /*
+       * SIN HOJA DE VIDA, EL AVISO VA EN LA PÁGINA, no solo en la burbuja del
+       * navegador. `reportValidity()` frena el envío igual, pero esa burbuja en
+       * el celular se va en un par de segundos, o no se pinta, o queda fuera de
+       * la pantalla: se pulsa «Enviar postulación» y aparentemente no pasa
+       * nada. Escrito junto al campo, el motivo se queda hasta que se arregle.
+       */
+      if ((entrada!.files?.length ?? 0) === 0) {
+        const ayuda = form.querySelector<HTMLElement>('[data-ayuda-hv]')?.textContent?.trim() ?? '';
+        avisarArchivo(`Falta adjuntar tu hoja de vida. ${ayuda}`.trim());
+      }
+
       if (!form.reportValidity()) return;
 
       mostrarErrores([]);

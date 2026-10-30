@@ -10,8 +10,30 @@
  * SOLO PDF, DOC Y DOCX. Una hoja de vida es un documento, no una foto. La
  * comprobación del contenido (bytes mágicos: `%PDF`, contenedor OLE2 para .doc
  * y ZIP con carpeta `word/` para .docx) la hace `validarArchivo` de
- * adjuntos.ts; aquí solo se restringe la lista de extensiones antes de
- * llamarla, para que un .png no reciba un mensaje que hable de JPG y PNG.
+ * adjuntos.ts, a la que se le pasa esa lista de tipos para que un .png no
+ * reciba un mensaje que hable de JPG y PNG.
+ *
+ * DECIDE EL CONTENIDO, NO EL NOMBRE (30·10·2026, `confiarEnElContenido`). Antes
+ * la extensión del nombre se comprobaba PRIMERO, y un nombre sin extensión o
+ * con otra se rechazaba con «formato no permitido» sin llegar a mirar los
+ * bytes. En el PC eso no molesta a nadie: el nombre viene del sistema de
+ * archivos y trae su «.pdf». EN EL CELULAR SÍ, y era la mitad del problema por
+ * el que los candidatos no podían adjuntar su hoja de vida: el selector de
+ * Android entrega el nombre que muestra el proveedor del archivo (Drive,
+ * Descargas, Documentos de WhatsApp, Gmail), y muchos lo dan sin extensión.
+ * Ahora manda el contenido: si los bytes son de un PDF, DOC o DOCX se acepta y
+ * se le pone la extensión que le corresponde. No se pierde nada de seguridad
+ * —lo que se exigía de verdad era el contenido, y se sigue exigiendo— y la
+ * doble extensión sospechosa se sigue rechazando igual.
+ *
+ * LA LISTA DE `accept` LLEVA TAMBIÉN LOS MIME. La otra mitad del problema:
+ * Chrome de Android traduce cada extensión del `accept` a un tipo MIME y le
+ * pide al selector que esconda todo lo demás, así que un archivo cuyo proveedor
+ * no declara bien el tipo sale en gris o no sale. Con los MIME escritos al
+ * lado de las extensiones (y `application/octet-stream`, que es lo que declaran
+ * los gestores de archivos que no saben de qué tipo es) el archivo se puede
+ * elegir, y quien decide si vale es la validación de arriba, en el navegador y
+ * otra vez en el servidor.
  *
  * TOPE DE 3 MB. El archivo viaja dentro del cuerpo de la petición a la función
  * de Vercel, y Vercel rechaza cuerpos de más de 4,5 MB con un 413 antes de que
@@ -24,10 +46,7 @@
  */
 import {
   EXTENSION_A_MIME,
-  FORMATOS_LEGIBLES,
-  extensionDe,
   lectorDeBlob,
-  nombreParaMostrar,
   validarArchivo,
   type ArchivoAValidar,
   type ResultadoValidacion,
@@ -39,8 +58,19 @@ export const MAX_MB_HOJA_DE_VIDA = 3;
 /** Extensiones admitidas, con el punto y en minúsculas. */
 export const EXTENSIONES_HOJA_DE_VIDA: readonly string[] = ['.pdf', '.doc', '.docx'];
 
-/** Valor del atributo `accept` del <input type="file">. */
-export const ACEPTA_HOJA_DE_VIDA = EXTENSIONES_HOJA_DE_VIDA.join(',');
+/**
+ * Valor del atributo `accept` del <input type="file">.
+ *
+ * Extensiones Y tipos MIME, por el selector de archivos de Android (ver la
+ * cabecera). `application/octet-stream` entra a propósito: sin él, los gestores
+ * de archivos que no declaran el tipo dejan el PDF del candidato sin poder
+ * elegir. Es solo un filtro de comodidad; el formato lo decide `validarHojaDeVida`.
+ */
+export const ACEPTA_HOJA_DE_VIDA = [
+  ...EXTENSIONES_HOJA_DE_VIDA,
+  ...EXTENSIONES_HOJA_DE_VIDA.map((e) => EXTENSION_A_MIME[e] as string),
+  'application/octet-stream',
+].join(',');
 
 /** Lista legible de formatos, para los mensajes. */
 export const FORMATOS_HOJA_DE_VIDA = 'PDF, DOC o DOCX';
@@ -54,25 +84,20 @@ export const MIME_HOJA_DE_VIDA: readonly string[] = EXTENSIONES_HOJA_DE_VIDA.map
 );
 
 /**
- * Aplica todas las reglas a un archivo: extensión admitida, peso, doble
- * extensión y que el contenido sea de verdad lo que dice la extensión.
+ * Aplica todas las reglas a un archivo: peso, doble extensión sospechosa y que
+ * el contenido sea de verdad un PDF, un DOC o un DOCX.
  *
- * Devuelve el MIME real y el nombre saneado, que es el que va en el adjunto
- * del correo.
+ * Devuelve el MIME real y el nombre saneado —con la extensión del contenido,
+ * aunque el nombre no la trajera—, que es el que va en el adjunto del correo y
+ * en el archivo que recibe Control360.
  */
-export async function validarHojaDeVida(archivo: ArchivoAValidar): Promise<ResultadoValidacion> {
-  const extension = extensionDe(archivo.nombre);
-  if (!EXTENSIONES_HOJA_DE_VIDA.includes(extension)) {
-    return {
-      ok: false,
-      error: `«${nombreParaMostrar(archivo.nombre)}»: formato no permitido. La hoja de vida debe ser ${FORMATOS_HOJA_DE_VIDA}.`,
-    };
-  }
-  const resultado = await validarArchivo(archivo, { maxMb: MAX_MB_HOJA_DE_VIDA });
-  if (resultado.ok) return resultado;
-  // Los mensajes de adjuntos.ts nombran también JPG y PNG, que aquí no valen:
-  // se sustituye la lista por la de la hoja de vida.
-  return { ok: false, error: resultado.error.replace(FORMATOS_LEGIBLES, FORMATOS_HOJA_DE_VIDA) };
+export function validarHojaDeVida(archivo: ArchivoAValidar): Promise<ResultadoValidacion> {
+  return validarArchivo(archivo, {
+    maxMb: MAX_MB_HOJA_DE_VIDA,
+    mimesPermitidos: MIME_HOJA_DE_VIDA,
+    formatosLegibles: FORMATOS_HOJA_DE_VIDA,
+    confiarEnElContenido: true,
+  });
 }
 
 /** Atajo de navegador: valida un File tal cual sale del <input type="file">. */
