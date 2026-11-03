@@ -767,7 +767,19 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       entrada!.setCustomValidity(mensaje);
     }
 
+    /*
+     * Copia en memoria de la hoja de vida aceptada, y es la que viaja.
+     *
+     * En Chrome de Android, un archivo elegido desde WhatsApp o Drive puede
+     * dejar de leerse entre que se elige y se envía: el navegador lo relee al
+     * mandar el multipart, ve que "cambió" y `fetch` lanza antes de salir
+     * (ERR_UPLOAD_FILE_CHANGED), que en pantalla era un E-RED con la red sana.
+     * Leído una vez al elegirlo (son 3 MB como mucho), ya no depende del disco.
+     */
+    let copiaArchivo: File | null = null;
+
     entrada.addEventListener('change', async () => {
+      copiaArchivo = null;
       const archivo = entrada!.files?.[0] ?? null;
       if (!archivo) {
         // Diálogo cancelado: el input quedó vacío y se dice.
@@ -783,8 +795,12 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       // Mientras se leen las firmas el envío queda bloqueado.
       entrada!.setCustomValidity('Estamos revisando el archivo, espera un momento.');
       let veredicto;
+      let copia: File | null = null;
       try {
         veredicto = await validarFileHojaDeVida(archivo);
+        if (veredicto.ok) {
+          copia = new File([await archivo.arrayBuffer()], archivo.name, { type: archivo.type });
+        }
       } catch (fallo) {
         /*
          * LEER EL ARCHIVO FALLÓ, y en el celular eso pasa de verdad: un archivo
@@ -812,6 +828,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
         return;
       }
 
+      copiaArchivo = copia;
       avisarArchivo('');
       mostrarArchivo(archivo);
     });
@@ -1044,6 +1061,8 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       // y archivo. Sin cabecera content-type: la pone el navegador, con el
       // boundary.
       const cuerpo = new FormData(form);
+      // La copia leída al elegirlo, no el archivo del disco (ver copiaArchivo).
+      if (copiaArchivo) cuerpo.set('hoja-de-vida', copiaArchivo, copiaArchivo.name);
       cuerpo.set('turnstileToken', turnstileToken);
       if (sinVerificar) {
         cuerpo.set('sin_verificar', 'si');

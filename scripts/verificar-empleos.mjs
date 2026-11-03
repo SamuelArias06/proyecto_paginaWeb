@@ -76,7 +76,7 @@
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { crc32 } from 'node:zlib';
 import { chromium } from 'playwright';
 
@@ -1100,6 +1100,40 @@ async function revisarEnvio(navegador, archivos, etiqueta, viewport) {
       `${etiqueta} · ${caso}: el formulario sigue ahí, con los datos escritos`,
       (await pagina.locator('[data-form-empleo]').isVisible()) &&
         (await pagina.locator('#nombre-empleo').inputValue()) !== '',
+    );
+    await pagina.close();
+  }
+
+  /*
+   * ---- 5. El archivo cambia en el disco después de elegirlo ---------------
+   *
+   * Lo que vio un candidato en Chrome de Android (E-RED con un .docx de 30 KB y
+   * el servidor sano): el archivo elegido desde WhatsApp o Drive deja de poder
+   * leerse cuando llega el envío, y `fetch` lanza `TypeError` antes de salir
+   * (ERR_UPLOAD_FILE_CHANGED). En el escritorio se reproduce igual: se elige el
+   * archivo y se reescribe antes de pulsar Enviar. Lo que tiene que viajar es la
+   * copia que se leyó al elegirlo.
+   */
+  {
+    const cambiante = join(dirname(archivos.pdfValido), `cambia-${etiqueta}.pdf`);
+    await writeFile(cambiante, PDF_MINIMO);
+    const { pagina, registro } = await abrir(contexto);
+    await rellenar(pagina, cambiante);
+    await pagina.waitForTimeout(300);
+    await writeFile(cambiante, Buffer.concat([PDF_MINIMO, Buffer.from('% cambiado\n')]));
+    await pagina.click('[data-enviar-empleo]');
+    await pagina.waitForTimeout(1200);
+
+    comprobar(
+      `${etiqueta} · Archivo cambiado tras elegirlo: la postulación se envía igual`,
+      await pagina.locator('[data-confirmacion-empleo]').isVisible(),
+      `${await textoDe(pagina.locator('[data-errores-empleo]'))} | ${await textoDe(pagina.locator('[data-codigo-error]'))}`,
+    );
+    const hoja = registro.envios[0]?.partes?.find((p) => p.nombre === 'hoja-de-vida');
+    comprobar(
+      `${etiqueta} · Archivo cambiado tras elegirlo: viajan los bytes que se revisaron al elegirlo`,
+      hoja?.archivo === `cambia-${etiqueta}.pdf` && Buffer.compare(hoja.datos, PDF_MINIMO) === 0,
+      hoja ? `${hoja.archivo} ${hoja.datos.length} B` : '(no llegó)',
     );
     await pagina.close();
   }

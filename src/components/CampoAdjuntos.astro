@@ -260,7 +260,21 @@ const ayuda = `Formatos permitidos: ${FORMATOS_LEGIBLES}. Máximo ${maxMb} MB.`;
             problemas.push(veredicto.error);
             continue;
           }
-          elegidos.push(archivo);
+          /*
+           * Se guarda una copia en memoria, no el archivo del disco. En Chrome
+           * de Android uno elegido desde WhatsApp o Drive puede dejar de leerse
+           * antes de subirlo (ERR_UPLOAD_FILE_CHANGED) y la subida falla con la
+           * red sana. Leído aquí, ya no depende del disco.
+           */
+          try {
+            elegidos.push(
+              new File([await archivo.arrayBuffer()], archivo.name, { type: archivo.type }),
+            );
+          } catch {
+            problemas.push(
+              `«${nombreParaMostrar(archivo.name)}»: no pudimos leerlo. Vuelve a elegirlo; si está en WhatsApp o Drive, descárgalo primero al celular.`,
+            );
+          }
         }
       } finally {
         entrada.setCustomValidity('');
