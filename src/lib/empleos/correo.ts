@@ -114,6 +114,29 @@ export interface OpcionesCorreo {
   enlace?: string;
   /** Identificador de la postulación guardada (`EMP-…`), para poder buscarla. */
   id?: string;
+  /** Reloj de un intento, en ms. Solo lo cambian las pruebas. */
+  esperaMs?: number;
+}
+
+/** Lo que devuelve `resend.emails.send`, en lo que de él se usa. */
+interface SalidaResend {
+  data?: { id?: string } | null;
+  error?: { message: string } | null;
+}
+
+/**
+ * Pone un reloj a una promesa que no sabe pararse sola.
+ *
+ * No cancela la petición —el SDK de Resend no lo permite—, solo deja de
+ * esperarla. Ver `ESPERA_CORREO_MS` para el porqué y el riesgo aceptado.
+ */
+function conReloj(promesa: Promise<SalidaResend>, ms: number): Promise<SalidaResend> {
+  return Promise.race([
+    promesa,
+    new Promise<SalidaResend>((listo) =>
+      setTimeout(() => listo({ error: { message: `Resend no respondió en ${ms} ms.` } }), ms),
+    ),
+  ]);
 }
 
 /** Aviso de cabecera cuando la postulación no pasó por el reto de Turnstile. */
@@ -304,7 +327,8 @@ export async function enviarCorreoPostulacion(
   const fecha = fechaLegible(ahora);
 
   try {
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await conReloj(
+      resend.emails.send({
       from: correoRemitenteEmpleos(env),
       to: correoDestinoEmpleos(env),
       replyTo: datos.correo,
@@ -320,7 +344,9 @@ export async function enviarCorreoPostulacion(
               contentType: datos.hojaDeVida.mime,
             },
           ],
-    });
+      }),
+      opciones.esperaMs ?? ESPERA_CORREO_MS,
+    );
     if (error) return { ok: false, error: error.message };
     return { ok: true, id: data?.id };
   } catch (fallo) {
@@ -344,6 +370,28 @@ const PAUSAS_MS = [500, 1500];
 
 /** Cuántas veces se intenta en total. */
 export const INTENTOS_CORREO = PAUSAS_MS.length + 1;
+
+/**
+ * Reloj de UN intento. Mismo valor que el de Control360 (./control360.ts).
+ *
+ * POR QUÉ HACE FALTA. El SDK de Resend no acepta un timeout, así que una
+ * llamada colgada se quedaba colgada: los únicos segundos que la cortaban eran
+ * los de la función de Vercel. Y cuando los agota, la función responde 504 y
+ * NADA de lo que viene después llega a ejecutarse —en particular `ponerASalvo`
+ * (./postular.ts), que es quien guarda la hoja de vida en el Blob cuando el
+ * correo no sale—. Es decir: Resend lento costaba la postulación entera, que es
+ * justo lo que esa red de seguridad existe para evitar.
+ *
+ * EL RIESGO ACEPTADO. Si el correo sí salió y lo que se perdió fue su
+ * respuesta, el reintento manda un segundo correo: Resend no tiene llave de
+ * idempotencia. Talento Humano vería la misma hoja de vida repetida, y es el
+ * intercambio que este archivo ya tenía escrito en su cabecera: una postulación
+ * duplicada se borra, una perdida no se recupera.
+ *
+ * Tres intentos de 8 s más las dos pausas son 26 s en el peor caso, y la función
+ * tiene 60 (`maxDuration` en astro.config.mjs): queda sitio para el respaldo.
+ */
+export const ESPERA_CORREO_MS = 8000;
 
 function esperar(ms: number): Promise<void> {
   return new Promise((listo) => setTimeout(listo, ms));

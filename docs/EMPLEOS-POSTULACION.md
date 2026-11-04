@@ -358,6 +358,28 @@ campo rechazando los archivos de más de 3 MB, un `E-GRANDE` significa que algo
 se saltó esa comprobación, y por eso tiene código propio en vez de quedar
 escondido detrás de un mensaje genérico.
 
+### Resend colgado ya no cuesta la postulación
+
+El SDK de Resend **no acepta un timeout**, así que una llamada colgada se
+quedaba colgada: los únicos segundos que la cortaban eran los de la función de
+Vercel. Y eso era lo grave, porque cuando el presupuesto de la función se agota
+Vercel responde `504` y **nada del código posterior corre** — en particular
+`ponerASalvo`, que es justo quien guarda la hoja de vida en el Blob cuando el
+correo no sale. Resultado: Resend lento costaba la postulación entera, y se
+perdía precisamente por el camino que existe para no perderla.
+
+Ahora cada intento tiene su reloj, `ESPERA_CORREO_MS` = 8 s, el mismo valor que
+Control360. Tres intentos y dos pausas son **26 s** en el peor caso, y la
+función tiene **60 s** (`maxDuration` en `astro.config.mjs`, antes sin fijar y
+por tanto a merced del valor por defecto de la cuenta): queda sitio de sobra
+para que el respaldo se escriba.
+
+El riesgo se acepta a conciencia: si el correo sí salió y lo que se perdió fue
+su respuesta, el reintento manda un segundo correo, porque Resend no tiene llave
+de idempotencia como Control360. Talento Humano vería la misma hoja de vida
+repetida, y es el intercambio que este documento ya tenía escrito: **una
+postulación duplicada se borra, una perdida no se recupera.**
+
 ### El último recurso lleva lo que la persona ya escribió
 
 Todos los mensajes de error acaban igual: «mándanos tu hoja de vida por

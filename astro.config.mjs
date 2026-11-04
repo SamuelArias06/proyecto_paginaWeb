@@ -99,6 +99,22 @@ export default defineConfig({
   // src/lib/empleos/flyer.mjs). No se activa `imageService`: las imágenes
   // locales siguen optimizándose en el build con astro:assets, como siempre.
   adapter: vercel({
+    /*
+     * CUANTO PUEDE TARDAR LA FUNCION, dicho a mano.
+     *
+     * Sin esto se usaba el valor por defecto de la cuenta, que no esta escrito
+     * en ningun sitio del repositorio y puede cambiar sin que nos enteremos. Y
+     * el presupuesto importa: cuando se agota, Vercel responde 504 y NADA del
+     * codigo posterior corre, en particular `ponerASalvo`
+     * (src/lib/empleos/postular.ts), que es quien guarda la hoja de vida en el
+     * Blob cuando el correo no sale. Agotar el reloj costaba la postulacion.
+     *
+     * 60 s es el techo del plan Hobby, y sobra: el peor caso de
+     * /api/empleos/postular son tres intentos de correo de 8 s mas dos pausas
+     * (26 s, ver ESPERA_CORREO_MS en src/lib/empleos/correo.ts), Control360 en
+     * paralelo con sus propios 8 s, y el respaldo al final.
+     */
+    maxDuration: 60,
     isr: enVercel ? configIsr(process.env) : false,
     ...(enVercel ? { imagesConfig: CONFIG_IMAGENES_VERCEL } : {}),
   }),
