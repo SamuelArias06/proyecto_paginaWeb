@@ -841,6 +841,11 @@ async function revisarEnvio(navegador, archivos, etiqueta, viewport) {
       partes.map((p) => `${p.nombre}=${p.archivo ?? p.datos.toString('utf8').slice(0, 40)}`).join(' | '),
     );
     comprobar(
+      `${etiqueta} · Envío: va el idEnvio que identifica la postulación`,
+      /^[A-Za-z0-9-]{8,64}$/.test(valor('idEnvio') ?? ''),
+      String(valor('idEnvio')),
+    );
+    comprobar(
       `${etiqueta} · Envío: va la casilla de autorización`,
       valor('autorizacion') === 'si',
       String(valor('autorizacion')),
@@ -1076,13 +1081,20 @@ async function revisarEnvio(navegador, archivos, etiqueta, viewport) {
       'E-SIN-API',
       'no está disponible en esta dirección',
     ],
-    ['La red caída', { respuesta: 'caida' }, 'E-RED', 'Revisa tu conexión'],
+    [
+      'La red caída',
+      { respuesta: 'caida' },
+      'E-RED',
+      'la conexión se cortó mientras subía tu hoja de vida',
+    ],
   ]) {
     const { pagina } = await abrir(contexto, plan);
     await rellenar(pagina, archivos.pdfValido);
     await pagina.waitForTimeout(300);
     await pagina.click('[data-enviar-empleo]');
-    await pagina.waitForTimeout(1200);
+    // Con la red caída se insiste tres veces (1,2 s + 3,5 s de pausa) antes de
+    // rendirse: hay que esperar a que acabe de intentarlo.
+    await pagina.waitForTimeout(7000);
 
     const errores = pagina.locator('[data-errores-empleo]');
     comprobar(
@@ -1134,6 +1146,52 @@ async function revisarEnvio(navegador, archivos, etiqueta, viewport) {
       `${etiqueta} · Archivo cambiado tras elegirlo: viajan los bytes que se revisaron al elegirlo`,
       hoja?.archivo === `cambia-${etiqueta}.pdf` && Buffer.compare(hoja.datos, PDF_MINIMO) === 0,
       hoja ? `${hoja.archivo} ${hoja.datos.length} B` : '(no llegó)',
+    );
+    await pagina.close();
+  }
+
+  /*
+   * LA RED SE CAE UNA VEZ Y LA POSTULACIÓN SE SALVA.
+   *
+   * Es el caso que nos reportaron: desde el celular, «no pudimos conectar con
+   * el servidor» (E-RED). Subir dos o tres megas por datos móviles es la parte
+   * frágil de todo esto y basta un segundo de túnel para que el `fetch` muera.
+   * Con un solo intento eso era el final del camino. Ahora se insiste, y lo que
+   * el candidato ve es su confirmación.
+   *
+   * Y NO SE DUPLICA: los dos intentos llevan el mismo `idEnvio`, que el
+   * servidor usa como llave de idempotencia de Control360.
+   */
+  {
+    const { pagina, registro } = await abrir(contexto, { secuencia: ['caida', 'ok'] });
+    await rellenar(pagina, archivos.pdfValido);
+    await pagina.waitForTimeout(300);
+    await pagina.click('[data-enviar-empleo]');
+    await pagina.waitForTimeout(4000);
+
+    comprobar(
+      `${etiqueta} · Red intermitente: el reintento la salva y sale la confirmación`,
+      await pagina.locator('[data-confirmacion-empleo]').isVisible(),
+      await textoDe(pagina.locator('[data-errores-empleo]')),
+    );
+    comprobar(
+      `${etiqueta} · Red intermitente: se intentó dos veces, no más`,
+      registro.envios.length === 2,
+      `${registro.envios.length} envíos`,
+    );
+    const ids = registro.envios.map(
+      (e) => e.partes?.find((x) => x.nombre === 'idEnvio')?.datos.toString() ?? '',
+    );
+    comprobar(
+      `${etiqueta} · Red intermitente: los dos intentos llevan el MISMO idEnvio`,
+      ids.length === 2 && ids[0] !== '' && ids[0] === ids[1],
+      ids.join(' | '),
+    );
+    comprobar(
+      `${etiqueta} · Red intermitente: el segundo intento lleva la hoja de vida otra vez`,
+      (registro.envios[1]?.partes ?? []).some(
+        (x) => x.nombre === 'hoja-de-vida' && x.datos.length > 0,
+      ),
     );
     await pagina.close();
   }

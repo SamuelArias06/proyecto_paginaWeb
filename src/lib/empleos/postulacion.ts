@@ -39,6 +39,13 @@ export const CAMPOS = {
   sinVerificar: 'sin_verificar',
   /** Código de Cloudflare del fallo, para el registro. Nunca se muestra solo. */
   turnstileCodigo: 'turnstileCodigo',
+  /**
+   * Identifica la POSTULACIÓN, no la petición: el navegador manda el mismo
+   * valor en los reintentos del envío (ver FormularioEmpleo.astro). Sirve de
+   * llave de idempotencia de Control360, para que una respuesta perdida en una
+   * red de celular no acabe creando dos veces la misma postulación allá.
+   */
+  idEnvio: 'idEnvio',
 } as const;
 
 /** Lo que manda el formulario en `sin_verificar` cuando el reto no se pudo pasar. */
@@ -46,6 +53,13 @@ const VALORES_SIN_VERIFICAR = new Set(['si', 'on', 'true', '1']);
 
 /** Forma admitida de un código de Cloudflare: corto y sin nada raro dentro. */
 const FORMA_CODIGO = /^[A-Za-z0-9_-]{1,24}$/;
+
+/**
+ * Forma admitida del `idEnvio`: un UUID, o el respaldo que arma el navegador
+ * cuando `crypto.randomUUID` no existe. Se filtra por forma porque viaja a
+ * Control360 como llave de idempotencia y acaba escrito en un registro.
+ */
+const FORMA_ID_ENVIO = /^[A-Za-z0-9-]{8,64}$/;
 
 export interface HojaDeVidaValidada {
   /** Nombre con tildes y espacios, para mostrar en el correo. */
@@ -80,6 +94,11 @@ export interface PostulacionValidada {
   sinVerificar: boolean;
   /** Código de Cloudflare del fallo, o cadena vacía. Solo para el registro. */
   codigoTurnstile: string;
+  /**
+   * El que mandó el navegador, o cadena vacía si no vino o no tenía forma de
+   * identificador. Llave de idempotencia de Control360.
+   */
+  idEnvio: string;
   hojaDeVida: HojaDeVidaValidada;
   /**
    * El filtro de Control360 (src/lib/empleos/preguntas.ts). `vacanteSlug` es la
@@ -210,6 +229,11 @@ export async function validarPostulacion(
   const codigoBruto = texto(formulario.get(CAMPOS.turnstileCodigo));
   const codigoTurnstile = FORMA_CODIGO.test(codigoBruto) ? codigoBruto : '';
 
+  // No es obligatorio: un multipart armado a mano puede no traerlo, y entonces
+  // el servidor pone el suyo como siempre. Nunca es motivo de rechazo.
+  const idBruto = texto(formulario.get(CAMPOS.idEnvio));
+  const idEnvio = FORMA_ID_ENVIO.test(idBruto) ? idBruto : '';
+
   const hojaDeVida = await revisarHojaDeVida(formulario.get(CAMPOS.hojaDeVida), errores);
 
   if (errores.length > 0 || !hojaDeVida || !municipio) {
@@ -229,6 +253,7 @@ export async function validarPostulacion(
       turnstileToken,
       sinVerificar,
       codigoTurnstile,
+      idEnvio,
       hojaDeVida,
       vacanteSlug: vacante?.slug ?? null,
       respuestas,

@@ -241,6 +241,84 @@ Lo que **no** cambió: una hoja de vida sigue siendo un documento, no una foto. 
 JPG o un PNG se rechazan, pero el mensaje ya dice «es una foto, no un documento»
 y cómo arreglarlo, en vez de hablar de formatos no permitidos.
 
+## E-RED: el envío que se cortaba y no dejaba rastro
+
+Horas después de arreglar el campo de la hoja de vida, el mismo celular llegó
+hasta el final y falló en el paso siguiente: **«No pudimos conectar con el
+servidor», código E-RED**. En los registros de Vercel no había NADA de esa
+postulación —ni la petición, ni un error—, y eso es coherente con el error: el
+`fetch` no llegó a completarse, así que la función nunca se invocó. Se
+comprobó que el endpoint sí aceptaba cuerpos grandes (un multipart de 2,9 MB
+contra producción responde con normalidad) y que cada invocación real sí se
+registra, así que el envío murió antes de llegar. Dos causas posibles, y se
+cerraron las dos:
+
+1. **Una excepción de Turnstile abortaba el envío.** `token()` del formulario
+   prometía no lanzar nunca, pero relanzaba cualquier error que no fuera un
+   `ErrorTurnstile`, y el `catch` del envío lo enseñaba como un fallo de red.
+   El código de Cloudflare **lanza excepciones propias** (`render`, `reset` y
+   `execute` pueden tirar en un WebView viejo o con el iframe bloqueado), así
+   que el camino existía: una postulación perdida y un mensaje que hablaba de la
+   conexión. Ahora `src/lib/turnstile-cliente.ts` convierte en `ErrorTurnstile`
+   todo lo que pueda salir de la librería de Cloudflare, y `token()` absorbe
+   cualquier cosa y sigue adelante **sin verificar**, que es lo que siempre
+   quiso hacer. Ningún fallo de Turnstile puede volver a costar una postulación.
+2. **La subida se cortaba a mitad.** Mandar dos o tres megas por datos móviles
+   es la parte frágil de todo esto: basta un cambio de antena o un segundo de
+   túnel. Con un solo intento, eso era el final del camino. Ahora el POST se
+   **reintenta hasta tres veces** (pausas de 1,2 s y 3,5 s) y solo cuando el
+   `fetch` falla, es decir cuando no hubo respuesta de ningún tipo; un 400 o un
+   429 son respuestas y se enseñan tal cual.
+
+**Los reintentos no duplican la postulación.** El navegador genera un `idEnvio`
+por postulación (un UUID; con respaldo para los WebView sin
+`crypto.randomUUID`) y lo manda igual en los tres intentos. El servidor lo usa
+como **llave de idempotencia de Control360**: si el primer intento llegó y lo
+que se perdió fue su respuesta, el reintento no crea una segunda fila allá. El
+correo sí podría llegar dos veces en ese caso concreto —Talento Humano vería la
+misma hoja de vida repetida—, y es un cambio aceptado a conciencia: una
+postulación duplicada se borra, una perdida no se recupera.
+
+Y el mensaje de E-RED ya no dice «revisa tu conexión» a secas: dice que la
+conexión se cortó subiendo la hoja de vida, cuántas veces se intentó, y propone
+pasar a wifi o mandarla por WhatsApp.
+
+### El testigo: `POST /api/empleos/diagnostico`
+
+Un fallo de red no deja rastro en el servidor por definición, y eso dejó el
+problema invisible: la única forma de avanzar era conjeturar. Para que no vuelva
+a pasar, **cuando el formulario se rinde avisa**, y el servidor escribe una
+línea en el registro (`src/lib/empleos/diagnostico.ts`):
+
+```bash
+npx vercel logs --deployment dstunja.com --json --since 60m | grep diagnostico
+# [empleos/diagnostico] {"paso":"red","error":"TypeError","mensaje":"Failed to fetch",
+#   "bytes":2612044,"intentos":3,"red":"3g","incrustado":"webview","ua":"Mozilla/5.0 (…wv)"}
+```
+
+Con eso se lee de un tirón lo que antes no se veía: en qué paso se rindió, qué
+excepción fue, **cuánto pesaba la hoja de vida**, cuántos intentos se hicieron,
+qué red declaraba el teléfono y si estaba dentro del navegador de otra
+aplicación. Y el aviso mismo es una prueba de vida: pesa menos de 1 KB, así que
+**si llega, la red del candidato sí daba para hablar con el servidor** y lo que
+falló fue subir los megas del archivo; si no llega nada, el problema es
+anterior.
+
+No viaja ningún dato personal: ni nombre, ni correo, ni teléfono, ni el nombre
+del archivo, ni su contenido. Solo lo de arriba, y el `User-Agent`, que es lo
+mismo que Vercel ya apunta en el registro de accesos de cada visita. El cuerpo
+se descarta si pasa de 2 KB, el `paso` se valida contra una lista cerrada, los
+textos se recortan y se les quitan los saltos de línea (si no, cualquiera podría
+escribir líneas falsas en el registro), y hay un límite de 12 avisos por IP cada
+10 minutos. La ruta responde `204` siempre: un diagnóstico que devuelve un error
+solo añadiría ruido a una página que ya está enseñando un fallo.
+
+**Si el problema vuelve, esto es lo primero que hay que mirar.** Según lo que
+diga `bytes`, el siguiente paso está claro: si las postulaciones que fallan
+llevan archivos de dos o tres megas, el arreglo de fondo es dejar de mandar la
+hoja de vida por la función y subirla del navegador a Vercel Blob, como ya hace
+PQRS (ver docs/PQRS-ADJUNTOS.md), y mandar por la función solo la referencia.
+
 ## Seguridad
 
 - **Campo trampa.** Un `<input name="sitio-web">` fuera de la pantalla, fuera del
@@ -560,6 +638,8 @@ src/lib/empleos/vacantes-fuente.ts vacantes: Control360 en el build, src/data/va
 src/lib/empleos/cargos.ts          lista de cargos admitidos (vacantes + espontánea)
 src/lib/empleos/hoja-de-vida.ts    formatos, tope de 3 MB y validación (navegador y servidor)
 src/lib/navegador-incrustado.ts    detecta el WebView de WhatsApp/Instagram, donde el selector no abre
+src/lib/empleos/diagnostico.ts     el testigo: por qué el navegador no pudo enviar (sin datos personales)
+src/pages/api/empleos/diagnostico.ts  la función que lo escribe en el registro de Vercel
 src/lib/empleos/config.ts          destino, remitente, los tres límites y el campo trampa
 src/lib/empleos/postulacion.ts     validación del multipart, con todos los errores a la vez
 src/lib/empleos/correo.ts          el correo, con reintentos, [SIN VERIFICAR] y variante con enlace
@@ -634,6 +714,12 @@ IP no se estorban; que Turnstile falla cerrado; que la marca `sin_verificar` se
 ignora si viene un token; que un fallo de Resend se reintenta tres veces y que el
 segundo intento, si sale, basta.
 
+`src/lib/empleos/diagnostico.test.ts` comprueba lo que el testigo NO se cree:
+que un `paso` fuera de la lista cae en «inesperado», que un salto de línea no
+puede partir la entrada del registro en dos, que los textos y los números se
+recortan, que un cuerpo que no es JSON o que pasa de 2 KB no escribe nada, y que
+el límite por IP corta a los 12 avisos sin afectar a otra IP.
+
 `src/lib/navegador-incrustado.test.ts` prueba la detección del WebView con
 `User-Agent` reales de los dos lados: que se avisa dentro del navegador de
 WhatsApp (que solo se delata por el token `wv`), de Instagram, de Facebook y de
@@ -641,6 +727,11 @@ TikTok, y que **no** se avisa en Chrome de Android, Samsung Internet, Firefox,
 Safari de iPhone ni Chrome de escritorio. Los dos lados cuestan: no avisar deja
 al candidato tocando un campo que no hace nada, y avisar de más ensucia el
 formulario.
+
+El verificador de navegador cubre también los reintentos del envío: que con la
+red caída se insiste tres veces y el mensaje lo dice; que si la red falla **una**
+vez el reintento salva la postulación y el candidato ve su confirmación; y que
+los dos intentos llevan el **mismo `idEnvio`** y la hoja de vida completa.
 
 `npm run verificar:empleos` abre además la página con esos mismos `User-Agent`
 (sección E) y comprueba que la franja sale con sus tres salidas, que el enlace

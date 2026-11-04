@@ -32,6 +32,7 @@ const datos: PostulacionValidada = {
   turnstileToken: 'tok',
   sinVerificar: false,
   codigoTurnstile: '',
+  idEnvio: '',
   hojaDeVida: {
     nombreOriginal: 'hoja de vida.pdf',
     nombreSeguro: 'hoja-de-vida.pdf',

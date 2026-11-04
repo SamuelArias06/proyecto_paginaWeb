@@ -529,6 +529,8 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
    * —publicado bajo /proyecto_paginaWeb— es una dirección que no existe.
    */
   const RUTA_ENVIO = ruta('/api/empleos/postular');
+  /** El testigo de fallos. Ver src/lib/empleos/diagnostico.ts. */
+  const RUTA_DIAGNOSTICO = ruta('/api/empleos/diagnostico');
 
   document.querySelectorAll<HTMLFormElement>('[data-form-empleo]').forEach((form) => {
     const entrada = form.querySelector<HTMLInputElement>('[data-entrada-hv]');
@@ -571,6 +573,59 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
     }
 
     const claveTurnstile = form.dataset.turnstileKey ?? '';
+
+    /** Intentos del POST: el primero y dos reintentos. Ver `enviarInsistiendo`. */
+    const INTENTOS_ENVIO = 3;
+    /** Pausa antes de cada reintento. Corta la primera, por si fue un hipo. */
+    const PAUSAS_ENVIO_MS = [1200, 3500];
+
+    /**
+     * Identifica ESTA postulación, no esta petición.
+     *
+     * Es el mismo valor en los tres intentos del envío, y el servidor lo usa
+     * como llave de idempotencia (ver `enviarInsistiendo`). `randomUUID` no
+     * existe en los WebView más viejos, así que hay respaldo: lo único que se
+     * le pide es no repetirse.
+     */
+    const idEnvio =
+      crypto?.randomUUID?.() ??
+      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+    /** Cuántos intentos de envío se hicieron. Solo para el diagnóstico. */
+    let intentosHechos = 0;
+
+    /**
+     * Cuenta al servidor por qué nos rendimos.
+     *
+     * Un fallo de red no deja NADA en los registros de Vercel —la petición no
+     * llegó—, así que sin este aviso el problema es invisible desde el otro lado
+     * y solo se puede adivinar. Va sin datos personales y sin esperar
+     * respuesta: ver src/lib/empleos/diagnostico.ts.
+     */
+    function contarElFallo(paso: string, fallo?: unknown) {
+      try {
+        const error = fallo as { name?: string; message?: string } | undefined;
+        const conexion = (navigator as { connection?: { effectiveType?: string } }).connection;
+        const cuerpo = JSON.stringify({
+          paso,
+          error: error?.name ?? '',
+          mensaje: error?.message ?? '',
+          bytes: entrada!.files?.[0]?.size ?? 0,
+          intentos: intentosHechos,
+          red: conexion?.effectiveType ?? '',
+          incrustado: incrustado ? (incrustado.aplicacion ?? 'webview') : '',
+          ua: navigator.userAgent,
+        });
+        void fetch(RUTA_DIAGNOSTICO, {
+          method: 'POST',
+          body: cuerpo,
+          headers: { 'content-type': 'application/json' },
+          keepalive: true,
+        }).catch(() => {});
+      } catch {
+        // El diagnóstico nunca puede estropear lo que ya está en pantalla.
+      }
+    }
 
     // --- Preguntas de filtro de la vacante ----------------------------------
     //
@@ -810,6 +865,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
          * la persona se quedaba sin saber si su hoja de vida estaba puesta.
          */
         console.warn('[empleos] no se pudo leer la hoja de vida:', fallo);
+        contarElFallo('lectura', fallo);
         entrada!.value = '';
         mostrarArchivo(null);
         avisarArchivo(
@@ -964,9 +1020,22 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
         });
         return { valor, sinVerificar: false, codigo: '' };
       } catch (fallo) {
-        if (!(fallo instanceof ErrorTurnstile)) throw fallo;
-        const codigo = codigoVisible(fallo);
-        console.warn('[empleos] sin verificación de seguridad:', fallo.motivo, codigo);
+        /*
+         * CUALQUIER COSA, no solo un ErrorTurnstile. Antes se relanzaba lo que
+         * no fuera un ErrorTurnstile, y ese relanzamiento acababa en el `catch`
+         * del envío, que lo enseñaba como «no pudimos conectar con el
+         * servidor» (E-RED) y DEJABA LA POSTULACIÓN SIN MANDAR. Una excepción
+         * del código de Cloudflare en un WebView —que es donde pasa— no puede
+         * costarle el puesto a nadie: se sigue sin verificar, que es lo que
+         * esta función prometía en su nombre y en su comentario.
+         */
+        const esDeTurnstile = fallo instanceof ErrorTurnstile;
+        const codigo = esDeTurnstile ? codigoVisible(fallo) : 'T-RARO';
+        console.warn(
+          '[empleos] sin verificación de seguridad:',
+          esDeTurnstile ? fallo.motivo : fallo,
+          codigo,
+        );
         form.dataset.verificacion = 'omitida';
         return { valor: '', sinVerificar: true, codigo };
       }
@@ -1064,6 +1133,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       // La copia leída al elegirlo, no el archivo del disco (ver copiaArchivo).
       if (copiaArchivo) cuerpo.set('hoja-de-vida', copiaArchivo, copiaArchivo.name);
       cuerpo.set('turnstileToken', turnstileToken);
+      cuerpo.set('idEnvio', idEnvio);
       if (sinVerificar) {
         cuerpo.set('sin_verificar', 'si');
         if (codigo) cuerpo.set('turnstileCodigo', codigo);
@@ -1076,6 +1146,46 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
         return { estado: respuesta.status, datos: null };
       }
       return { estado: respuesta.status, datos: (await respuesta.json()) as RespuestaApi };
+    }
+
+    /**
+     * El mismo envío, insistiendo cuando la red falla.
+     *
+     * POR QUÉ. En el celular, subir una hoja de vida de dos o tres megas por
+     * datos móviles es la parte frágil de todo esto: basta un cambio de antena,
+     * un segundo de túnel o un wifi que se cae para que el `fetch` muera a
+     * mitad de la subida. Con un solo intento, eso era el final del camino: el
+     * candidato veía «no pudimos conectar con el servidor» y su postulación no
+     * existía en ningún sitio. Tres intentos cuestan unos segundos y salvan
+     * justo el caso que más se da.
+     *
+     * Se reintenta SOLO cuando el `fetch` falla, es decir cuando no hubo
+     * respuesta de ningún tipo. Un 400 o un 429 son respuestas: ahí no hay nada
+     * que insistir, y se devuelven tal cual.
+     *
+     * NO DUPLICA LA POSTULACIÓN: los tres intentos llevan el mismo `idEnvio`,
+     * que el servidor usa como llave de idempotencia de Control360 (ver
+     * src/lib/empleos/control360.ts). Si el primero llegó y lo que se perdió fue
+     * su respuesta, el reintento no crea una segunda fila allá.
+     */
+    async function enviarInsistiendo(
+      turnstileToken: string,
+      sinVerificar: boolean,
+      codigo: string,
+    ): Promise<Desenlace> {
+      let ultimo: unknown;
+      for (let intento = 1; intento <= INTENTOS_ENVIO; intento += 1) {
+        intentosHechos = intento;
+        try {
+          return await enviar(turnstileToken, sinVerificar, codigo);
+        } catch (fallo) {
+          ultimo = fallo;
+          if (intento === INTENTOS_ENVIO) break;
+          console.warn(`[empleos] el envío falló (intento ${intento}), se reintenta:`, fallo);
+          await new Promise((listo) => setTimeout(listo, PAUSAS_ENVIO_MS[intento - 1]));
+        }
+      }
+      throw ultimo;
     }
 
     form.addEventListener('submit', async (evento) => {
@@ -1116,7 +1226,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
         ocultarAvisoVerificacion();
 
         // 2. El envío.
-        let desenlace = await enviar(
+        let desenlace = await enviarInsistiendo(
           verificacion.valor,
           verificacion.sinVerificar,
           verificacion.codigo,
@@ -1134,7 +1244,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
             desenlace.datos && !desenlace.datos.ok ? (desenlace.datos.codigo ?? '') : '';
           console.warn('[empleos] el servidor rechazó el token; se reenvía sin verificar:', codigo);
           form.dataset.verificacion = 'omitida';
-          desenlace = await enviar('', true, '');
+          desenlace = await enviarInsistiendo('', true, '');
         }
 
         const { estado, datos } = desenlace;
@@ -1145,6 +1255,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
            * tiene backend. NO se abre ningún gestor de correo: se dice qué pasa
            * y se ofrece WhatsApp, que sí puede llevar el archivo.
            */
+          contarElFallo('sin-api');
           mostrarErrores(
             [
               'El envío de postulaciones no está disponible en esta dirección. Entra a dstunja.com/empleos o mándanos tu hoja de vida por WhatsApp.',
@@ -1172,9 +1283,11 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
          * `token()`.
          */
         console.warn('[empleos] no se pudo enviar:', fallo);
+        contarElFallo('red', fallo);
         mostrarErrores(
           [
-            'No pudimos conectar con el servidor. Revisa tu conexión y vuelve a pulsar «Enviar postulación».',
+            `No pudimos enviar tu postulación: la conexión se cortó mientras subía tu hoja de vida (lo intentamos ${intentosHechos} veces).`,
+            'Si estás con datos móviles, prueba con wifi, o mándanos la hoja de vida por WhatsApp y la registramos nosotros.',
           ],
           'E-RED',
         );

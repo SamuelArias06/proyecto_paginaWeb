@@ -44,6 +44,57 @@ function formulario(extra: Record<string, string> = {}): FormData {
   return f;
 }
 
+/*
+ * EL idEnvio: identifica la POSTULACIÓN, no la petición.
+ *
+ * El navegador manda el mismo valor en los tres intentos del envío, y
+ * postular.ts lo usa como llave de idempotencia de Control360: así una
+ * respuesta que se perdió en la red de un celular no acaba creando dos veces la
+ * misma postulación. Nunca es obligatorio ni motivo de rechazo.
+ */
+describe('el idEnvio de los reintentos', () => {
+  const conPreguntas = { [nombreCampo('moto')]: 'SI' };
+
+  it('un UUID se conserva tal cual', async () => {
+    const id = '0b2b9b2e-3f4a-4c7d-8b1e-9f0a1b2c3d4e';
+    const r = await validarPostulacion(formulario({ ...conPreguntas, idEnvio: id }), { vacanteDe });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.datos.idEnvio).toBe(id);
+  });
+
+  it('el respaldo del navegador sin `crypto.randomUUID` también vale', async () => {
+    const id = 'm9x2k1-a7b3c9d1';
+    const r = await validarPostulacion(formulario({ ...conPreguntas, idEnvio: id }), { vacanteDe });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.datos.idEnvio).toBe(id);
+  });
+
+  it('sin idEnvio la postulación se acepta igual, y queda vacío', async () => {
+    const r = await validarPostulacion(formulario(conPreguntas), { vacanteDe });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.datos.idEnvio).toBe('');
+  });
+
+  /*
+   * Viaja a Control360 y acaba escrito en un registro, así que lo que no tenga
+   * forma de identificador se descarta en vez de rechazar la postulación: el
+   * servidor pondrá el suyo, como hacía antes de que esto existiera.
+   */
+  it('lo que no tiene forma de identificador se descarta, sin rechazar nada', async () => {
+    for (const malo of ['corto', 'con espacios aqui', 'a'.repeat(65), 'punto.y.coma;', '<script>']) {
+      const r = await validarPostulacion(formulario({ ...conPreguntas, idEnvio: malo }), {
+        vacanteDe,
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.datos.idEnvio).toBe('');
+    }
+  });
+});
+
 describe('validarPostulacion con preguntas de filtro', () => {
   it('exige la obligatoria y la devuelve junto a los demás errores', async () => {
     const r = await validarPostulacion(formulario(), { vacanteDe });

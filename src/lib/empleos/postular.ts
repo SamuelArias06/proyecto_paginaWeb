@@ -242,7 +242,13 @@ export async function atenderPostulacion(
   // el correo. Se espera aquí porque una función de Vercel se corta al responder.
   const [envio, aControl360] = await Promise.all([
     enviarConReintentos(datos, env, {}, new Date(), dormir),
-    enviarAControl360(datos, env),
+    /*
+     * El `idEnvio` del navegador manda, cuando viene: los reintentos del envío
+     * llevan el mismo, así que una respuesta que se perdió en la red del
+     * celular no crea dos postulaciones en Control360 (idempotencia allá). Sin
+     * él, `enviarAControl360` pone uno nuevo, como siempre.
+     */
+    enviarAControl360(datos, env, datos.idEnvio ? { envioId: datos.idEnvio } : {}),
   ]);
   if (aControl360.resultado !== 'apagado') {
     registrar(`control360:${aControl360.resultado}`, {

@@ -186,31 +186,49 @@ export function prepararTurnstile(contenedor: HTMLElement, sitekey: string): Pro
         rechazar(new ErrorTurnstile('no-cargo', 'Turnstile no cargó.'));
         return;
       }
-      idWidget =
-        window.turnstile.render(contenedor, {
+      /*
+       * `render` PUEDE LANZAR, y lo que lance no es un ErrorTurnstile.
+       *
+       * Es código de Cloudflare corriendo en un navegador cualquiera: en un
+       * WebView viejo, con el iframe bloqueado o con la API a medio cargar,
+       * `render` tira una excepción suya. Sin este try, esa excepción salía de
+       * aquí tal cual, los formularios no la reconocían como fallo de Turnstile
+       * y la trataban como un fallo de RED: el candidato veía «no pudimos
+       * conectar con el servidor» y SU POSTULACIÓN NO SALÍA. Convertida en
+       * `no-cargo`, el envío sigue adelante sin verificar, que es lo que
+       * siempre quiso este módulo.
+       */
+      try {
+        idWidget =
+          window.turnstile.render(contenedor, {
           sitekey,
           execution: 'execute',
           appearance: 'interaction-only',
           language: 'es',
           retry: 'never',
-          callback: (token: string) => resolverPendiente(token),
-          'before-interactive-callback': () => pendiente?.pedirInteraccion(),
-          'error-callback': (codigo?: unknown) => {
-            // El código va a la consola: es lo único que dice, por ejemplo,
-            // que el dominio no está autorizado en el widget de Cloudflare.
-            console.warn('[turnstile] error', codigo);
-            rechazarPendiente(
-              new ErrorTurnstile('fallo', 'La comprobación antirrobots falló.', String(codigo ?? '')),
-            );
-            return true;
-          },
-          'timeout-callback': () =>
-            rechazarPendiente(
-              new ErrorTurnstile('caducado', 'La verificación de seguridad no se completó a tiempo.'),
-            ),
-          'expired-callback': () =>
-            rechazarPendiente(new ErrorTurnstile('caducado', 'La comprobación antirrobots caducó.')),
-        }) ?? null;
+            callback: (token: string) => resolverPendiente(token),
+            'before-interactive-callback': () => pendiente?.pedirInteraccion(),
+            'error-callback': (codigo?: unknown) => {
+              // El código va a la consola: es lo único que dice, por ejemplo,
+              // que el dominio no está autorizado en el widget de Cloudflare.
+              console.warn('[turnstile] error', codigo);
+              rechazarPendiente(
+                new ErrorTurnstile('fallo', 'La comprobación antirrobots falló.', String(codigo ?? '')),
+              );
+              return true;
+            },
+            'timeout-callback': () =>
+              rechazarPendiente(
+                new ErrorTurnstile('caducado', 'La verificación de seguridad no se completó a tiempo.'),
+              ),
+            'expired-callback': () =>
+              rechazarPendiente(new ErrorTurnstile('caducado', 'La comprobación antirrobots caducó.')),
+          }) ?? null;
+      } catch (fallo) {
+        console.warn('[turnstile] render lanzó', fallo);
+        rechazar(new ErrorTurnstile('no-cargo', 'Turnstile no pudo montarse.'));
+        return;
+      }
 
       if (idWidget === null) {
         rechazar(new ErrorTurnstile('no-cargo', 'Turnstile no pudo montarse.'));
@@ -226,6 +244,9 @@ export function prepararTurnstile(contenedor: HTMLElement, sitekey: string): Pro
 
     window.alTurnstileListo = montar;
 
+    // Montar el <script> tampoco es infalible: un WebView con la CSP del
+    // anfitrión puede impedirlo. Igual que arriba, eso es `no-cargo`, no un
+    // fallo que deba cortarle el envío a nadie.
     const script = document.createElement('script');
     script.src =
       'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=alTurnstileListo';
@@ -282,8 +303,22 @@ export async function tokenTurnstile(opciones: OpcionesToken = {}): Promise<stri
   for (let intento = 1; intento <= INTENTOS_TOKEN; intento += 1) {
     try {
       return await ejecutarTurnstile(opciones);
-    } catch (fallo) {
-      if (!(fallo instanceof ErrorTurnstile)) throw fallo;
+    } catch (bruto) {
+      /*
+       * NUNCA SALE DE AQUÍ ALGO QUE NO SEA UN ErrorTurnstile. Antes se
+       * relanzaba cualquier otra excepción, y quien llamaba la confundía con un
+       * fallo de red y perdía el envío. Cualquier cosa rara es un `fallo`:
+       * reintentable, y si no, la postulación sale sin verificar.
+       */
+      const fallo =
+        bruto instanceof ErrorTurnstile
+          ? bruto
+          : new ErrorTurnstile(
+              'fallo',
+              'La comprobación antirrobots falló.',
+              undefined,
+            );
+      if (!(bruto instanceof ErrorTurnstile)) console.warn('[turnstile] fallo inesperado', bruto);
       ultimo = fallo;
       if (!MOTIVOS_REINTENTABLES.has(fallo.motivo) || intento === INTENTOS_TOKEN) break;
       console.warn('[turnstile] reintento tras', fallo.motivo, fallo.codigo ?? '');
@@ -334,7 +369,20 @@ function ejecutarTurnstile(opciones: OpcionesToken): Promise<string> {
       },
     };
 
-    window.turnstile!.reset(idWidget!);
-    window.turnstile!.execute(idWidget!);
+    /*
+     * `reset` y `execute` también son código de Cloudflare y también lanzan
+     * («widget not found» cuando el iframe se murió, por ejemplo). Lanzar aquí
+     * dentro rechaza esta promesa con un error crudo que los formularios no
+     * reconocen, y eso acabó enseñándose como un fallo de red mientras la
+     * postulación se quedaba sin enviar. Se convierte en `fallo`, que además es
+     * reintentable.
+     */
+    try {
+      window.turnstile!.reset(idWidget!);
+      window.turnstile!.execute(idWidget!);
+    } catch (fallo) {
+      console.warn('[turnstile] execute lanzó', fallo);
+      rechazarPendiente(new ErrorTurnstile('fallo', 'La comprobación antirrobots falló.'));
+    }
   });
 }
