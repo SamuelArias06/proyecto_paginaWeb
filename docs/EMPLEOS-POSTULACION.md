@@ -291,10 +291,27 @@ a pasar, **cuando el formulario se rinde avisa**, y el servidor escribe una
 línea en el registro (`src/lib/empleos/diagnostico.ts`):
 
 ```bash
-npx vercel logs --deployment dstunja.com --json --since 60m | grep diagnostico
+npx vercel logs --deployment dstunja.com --json --since 30m | grep diagnostico
 # [empleos/diagnostico] {"paso":"red","error":"TypeError","mensaje":"Failed to fetch",
 #   "bytes":2612044,"intentos":3,"red":"3g","incrustado":"webview","ua":"Mozilla/5.0 (…wv)"}
 ```
+
+**Y SE GUARDA EN EL BLOB, que es lo que de verdad sirve.** El plan Hobby retiene
+los registros de ejecución alrededor de **una hora**: `--since 24h` ya responde
+«*outside the available retention*». Un candidato avisa al día siguiente, o el
+lunes, y para entonces la línea de `console.warn` se borró — esa es la razón por
+la que este fallo se persiguió tres veces a ciegas. Así que cada aviso se
+escribe además en el store, bajo `empleos/diagnostico/<fecha>/<hora>-<sufijo>.json`,
+con la fecha delante para poder preguntar «¿qué falló ayer?» listando un prefijo:
+
+```bash
+# Los avisos de un día, en el panel de Vercel → Storage → pqrs-adjuntos,
+# o con el SDK, filtrando por prefijo:
+#   list({ prefix: 'empleos/diagnostico/20261104/' })
+```
+
+Guardar nunca estorba: sin `BLOB_READ_WRITE_TOKEN` no se escribe nada, y si la
+escritura falla el `console.warn` ya salió y la respuesta sigue siendo `204`.
 
 Con eso se lee de un tirón lo que antes no se veía: en qué paso se rindió, qué
 excepción fue, **cuánto pesaba la hoja de vida**, cuántos intentos se hicieron,
@@ -318,6 +335,28 @@ diga `bytes`, el siguiente paso está claro: si las postulaciones que fallan
 llevan archivos de dos o tres megas, el arreglo de fondo es dejar de mandar la
 hoja de vida por la función y subirla del navegador a Vercel Blob, como ya hace
 PQRS (ver docs/PQRS-ADJUNTOS.md), y mandar por la función solo la referencia.
+
+### Una respuesta que no es JSON ya no se confunde con «otra dirección»
+
+Las respuestas que escribe la **plataforma** de Vercel —no nuestro código—
+llegan en `text/plain`, así que el formulario no recibe `datos` y solo tiene el
+código de estado para deducir qué pasó. Antes los tres casos enseñaban el mismo
+mensaje, «*el envío no está disponible en esta dirección*»: un mensaje sobre la
+DIRECCIÓN para un problema de peso o de un servidor caído. Quien lo leía
+cambiaba de dirección, no de archivo, y seguía sin poder postular. Ahora cada
+uno dice lo que el candidato tiene que hacer, que es distinto en cada caso:
+
+| Respuesta | Qué fue | Código | Qué se le dice |
+| --- | --- | --- | --- |
+| `413 text/plain` | el cuerpo pasó de 4,5 MB y Vercel lo cortó antes de invocar la función | `E-GRANDE` | que aligere el PDF (y el tope real), o WhatsApp |
+| `5xx text/plain` | la función se cayó o tardó más de lo que la plataforma concede | `E-SERVIDOR-<estado>` | que vuelva en unos minutos, o WhatsApp |
+| `404` en HTML | no hay backend en esa dirección (el espejo estático) | `E-SIN-API` | que entre a dstunja.com/empleos, o WhatsApp |
+
+El límite de 4,5 MB está **medido contra producción**, no supuesto: un cuerpo de
+3,4 MB pasa y uno de 4,4 MB devuelve `413 FUNCTION_PAYLOAD_TOO_LARGE`. Con el
+campo rechazando los archivos de más de 3 MB, un `E-GRANDE` significa que algo
+se saltó esa comprobación, y por eso tiene código propio en vez de quedar
+escondido detrás de un mensaje genérico.
 
 ## Seguridad
 

@@ -511,7 +511,7 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
 <script>
   import { formatearTamano, nombreParaMostrar } from '../lib/adjuntos';
   import { registrarEvento } from '../lib/analitica';
-  import { validarFileHojaDeVida } from '../lib/empleos/hoja-de-vida';
+  import { MAX_MB_HOJA_DE_VIDA, validarFileHojaDeVida } from '../lib/empleos/hoja-de-vida';
   import { enlaceAbrirEnChrome, navegadorIncrustado } from '../lib/navegador-incrustado';
   import { LIMITES, PREFIJO_CAMPO, nombreCampo, type PreguntaVacante } from '../lib/empleos/preguntas';
   import { limpiarMunicipio, preguntasConTraslado } from '../lib/empleos/ubicacion';
@@ -1250,6 +1250,51 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
         const { estado, datos } = desenlace;
 
         if (datos === null) {
+          /*
+           * EL SERVIDOR NO CONTESTÓ JSON, y detrás hay tres razones muy
+           * distintas. Antes las tres enseñaban el mismo mensaje —«no está
+           * disponible en esta dirección»—, que habla de la DIRECCIÓN cuando el
+           * problema era el peso del archivo o un servidor caído. Quien lo leía
+           * cambiaba de dirección, no de archivo, y seguía sin poder postular.
+           *
+           * Los 413 y los 5xx los escribe la PLATAFORMA de Vercel, no nuestro
+           * código, y llegan como `text/plain`: por eso no traen `datos`.
+           */
+          if (estado === 413) {
+            /*
+             * Vercel rechaza los cuerpos de más de 4,5 MB ANTES de invocar la
+             * función (medido contra producción: 3,4 MB pasa, 4,4 MB da 413). El
+             * campo ya rechaza los de más de MAX_MB_HOJA_DE_VIDA, así que llegar
+             * aquí significa que el archivo se saltó esa comprobación.
+             */
+            contarElFallo('grande');
+            mostrarErrores(
+              [
+                `Tu hoja de vida es demasiado pesada para enviarla por la página (el máximo es ${MAX_MB_HOJA_DE_VIDA} MB).`,
+                'Guárdala en PDF con menos peso y vuelve a intentarlo, o mándanosla por WhatsApp y la registramos nosotros.',
+              ],
+              'E-GRANDE',
+            );
+            return;
+          }
+
+          if (estado >= 500) {
+            /*
+             * 502 o 504 de Vercel: la función falló o tardó más de lo que la
+             * plataforma le concede. Ya se insistió `intentosHechos` veces, así
+             * que no se le pide reintentar al instante.
+             */
+            contarElFallo('servidor');
+            mostrarErrores(
+              [
+                'Nuestro servidor tuvo un problema al recibir tu postulación y no pudimos completarla.',
+                'Vuelve a pulsar «Enviar postulación» en unos minutos, o mándanos la hoja de vida por WhatsApp y la registramos nosotros.',
+              ],
+              `E-SERVIDOR-${estado}`,
+            );
+            return;
+          }
+
           /*
            * No hay función que conteste. Es el espejo de GitHub Pages, que no
            * tiene backend. NO se abre ningún gestor de correo: se dice qué pasa

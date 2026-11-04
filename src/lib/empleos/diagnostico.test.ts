@@ -7,9 +7,12 @@
  * un error a una página que ya está enseñando un fallo.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as almacen from '../pqrs/almacen';
 import {
   MAX_BYTES_DIAGNOSTICO,
+  PREFIJO_DIAGNOSTICO,
   atenderDiagnostico,
+  rutaDiagnostico,
   sanearDiagnostico,
 } from './diagnostico';
 import type { Entorno } from './config';
@@ -159,5 +162,63 @@ describe('atenderDiagnostico', () => {
     }
     const otra = await atenderDiagnostico(peticion(cuerpo, '10.0.0.11'), ENTORNO);
     expect(otra.linea).not.toBeNull();
+  });
+});
+
+// --- Duradero: el registro de Vercel no sobrevive al fin de semana ---------
+//
+// En el plan Hobby los registros de ejecución duran alrededor de una hora, y un
+// candidato cuenta que no pudo postular al día siguiente. Por eso el aviso se
+// escribe también en el Blob. Lo que se prueba aquí es que eso no puede
+// estorbar: sin Blob no se guarda nada, y si la escritura falla la respuesta
+// sigue siendo 204 con su línea en el registro.
+
+describe('el aviso se guarda donde sobrevive', () => {
+  const CON_BLOB = { BLOB_READ_WRITE_TOKEN: 'vercel_blob_rw_prueba' } as Entorno;
+
+  it('la ruta lleva la fecha delante, para poder listar «lo de ayer»', () => {
+    const r = rutaDiagnostico(new Date('2026-11-04T15:30:09Z'));
+    expect(r.startsWith(`${PREFIJO_DIAGNOSTICO}2026`)).toBe(true);
+    expect(r.endsWith('.json')).toBe(true);
+    // Dos avisos del mismo segundo no se pisan.
+    expect(rutaDiagnostico()).not.toBe(rutaDiagnostico());
+  });
+
+  it('con Blob configurado, el aviso se escribe y se devuelve su ruta', async () => {
+    const guardar = vi.spyOn(almacen, 'guardarJson').mockResolvedValue('https://blob/x.json');
+    const r = await atenderDiagnostico(peticion('{"paso":"grande","bytes":4600000}'), CON_BLOB);
+
+    expect(r.estado).toBe(204);
+    expect(guardar).toHaveBeenCalledTimes(1);
+    const [destino, contenido] = guardar.mock.calls[0]!;
+    // La ruta devuelta es LA QUE SE ESCRIBIÓ, no otra recién calculada.
+    expect(r.guardado).toBe(destino);
+    expect((contenido as { paso: string }).paso).toBe('grande');
+    expect((contenido as { cuando?: string }).cuando).toBeTruthy();
+  });
+
+  it('sin Blob configurado no se guarda nada, y responde 204 igual', async () => {
+    const guardar = vi.spyOn(almacen, 'guardarJson');
+    const r = await atenderDiagnostico(peticion('{"paso":"red"}'), ENTORNO);
+
+    expect(r.estado).toBe(204);
+    expect(r.guardado).toBeNull();
+    expect(guardar).not.toHaveBeenCalled();
+    expect(registrado.some((l) => l.includes('[empleos/diagnostico]'))).toBe(true);
+  });
+
+  it('si la escritura falla, el aviso NO rompe la página que ya enseña un fallo', async () => {
+    vi.spyOn(almacen, 'guardarJson').mockRejectedValue(new Error('store lleno'));
+    const r = await atenderDiagnostico(peticion('{"paso":"servidor"}'), CON_BLOB);
+
+    expect(r.estado).toBe(204);
+    expect(r.guardado).toBeNull();
+    // La línea del registro salió ANTES de intentar guardar: no se pierde.
+    expect(registrado.some((l) => l.includes('"paso":"servidor"'))).toBe(true);
+  });
+
+  it('los dos pasos nuevos de la plataforma son pasos válidos, no «inesperado»', () => {
+    expect(sanearDiagnostico({ paso: 'grande' }).paso).toBe('grande');
+    expect(sanearDiagnostico({ paso: 'servidor' }).paso).toBe('servidor');
   });
 });

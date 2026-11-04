@@ -136,6 +136,10 @@ function leerCuerpo(peticion) {
  *   'guardada'          200 con referencia: el correo no salió pero la
  *                       postulación quedó guardada en el Blob
  *   'html'              404 en HTML, que es lo que devuelve el espejo estático
+ *   'grande'            413 en text/plain, como Vercel cuando el cuerpo pasa
+ *                       de 4,5 MB (medido contra producción)
+ *   'plataforma'        502 en text/plain, como Vercel cuando la función se
+ *                       cae o tarda más de lo que le concede
  *   'caida'             se corta la conexión sin contestar
  *
  * `funcion.plan.secuencia`: lista de respuestas, una por petición, para los
@@ -166,6 +170,22 @@ async function atenderFuncion(peticion, respuesta) {
       return;
     case 'html':
       respuesta.writeHead(404, { 'content-type': 'text/html' }).end('<h1>404</h1>');
+      return;
+    /*
+     * Los dos que escribe la PLATAFORMA, no nuestro código: no son JSON, así
+     * que el formulario no recibe `datos` y tiene que deducir qué pasó del
+     * código de estado. Antes los dos salían como «no está disponible en esta
+     * dirección», un mensaje sobre la dirección para un problema de peso.
+     */
+    case 'grande':
+      respuesta
+        .writeHead(413, { 'content-type': 'text/plain; charset=utf-8' })
+        .end('Request Entity Too Large FUNCTION_PAYLOAD_TOO_LARGE');
+      return;
+    case 'plataforma':
+      respuesta
+        .writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+        .end('An error occurred with your deployment FUNCTION_INVOCATION_FAILED');
       return;
     case 'servidor':
       json(500, {
@@ -1086,6 +1106,25 @@ async function revisarEnvio(navegador, archivos, etiqueta, viewport) {
       { respuesta: 'caida' },
       'E-RED',
       'la conexión se cortó mientras subía tu hoja de vida',
+    ],
+    /*
+     * El 413 y el 5xx de la plataforma llegan en text/plain, igual que el HTML
+     * del espejo, y antes se confundían con él: los tres enseñaban «no está
+     * disponible en esta dirección». Ahora cada uno dice lo suyo, porque lo que
+     * el candidato tiene que hacer es distinto en cada caso: aligerar el
+     * archivo, volver en unos minutos, o cambiar de dirección.
+     */
+    [
+      'El 413 de Vercel (cuerpo de más de 4,5 MB)',
+      { respuesta: 'grande' },
+      'E-GRANDE',
+      'demasiado pesada',
+    ],
+    [
+      'El 502 de Vercel (la función se cayó)',
+      { respuesta: 'plataforma' },
+      'E-SERVIDOR-502',
+      'tuvo un problema al recibir tu postulación',
     ],
   ]) {
     const { pagina } = await abrir(contexto, plan);

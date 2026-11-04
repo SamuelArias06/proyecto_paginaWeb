@@ -25,6 +25,10 @@
  * servidor, y entonces lo que falló fue subir los megas de la hoja de vida. Si
  * no llega nada, el problema es anterior. Las dos respuestas son útiles.
  */
+import * as almacen from '../pqrs/almacen';
+import { blobConfigurado } from '../pqrs/config';
+import { fechaColombia, sufijoAleatorio } from '../pqrs/radicado';
+import { PREFIJO_EMPLEOS } from './almacen';
 import { limitar, type Veredicto } from '../pqrs/limite-tasa';
 import { ipDePeticion } from '../pqrs/solicitud';
 import type { Entorno } from './config';
@@ -36,7 +40,17 @@ export const MAX_BYTES_DIAGNOSTICO = 2048;
 export const LIMITE_DIAGNOSTICO = { maximo: 12, ventanaSegundos: 600 };
 
 /** Pasos del formulario que pueden fallar. Lista cerrada: llega del navegador. */
-const PASOS = new Set(['red', 'sin-api', 'lectura', 'respuesta', 'inesperado']);
+const PASOS = new Set([
+  'red',
+  'sin-api',
+  /** 413: el cuerpo pasaba de 4,5 MB y Vercel lo cortó antes de la función. */
+  'grande',
+  /** 502 o 504 de la plataforma: la función falló o tardó demasiado. */
+  'servidor',
+  'lectura',
+  'respuesta',
+  'inesperado',
+]);
 
 /**
  * Recorta y deja solo caracteres imprimibles.
@@ -86,10 +100,35 @@ export function sanearDiagnostico(bruto: unknown): Diagnostico {
   };
 }
 
+/**
+ * Carpeta de los avisos dentro del store, separada de las postulaciones.
+ *
+ * NO cuelga de `empleos/<id>/`: ahí viven hojas de vida con datos personales, y
+ * esto no lleva ninguno. Mezclarlos obligaría a tratar las dos cosas con el
+ * mismo cuidado y el mismo plazo de borrado, y no son la misma cosa.
+ */
+export const PREFIJO_DIAGNOSTICO = `${PREFIJO_EMPLEOS}diagnostico/`;
+
+/**
+ * Una carpeta por día, un archivo por aviso.
+ *
+ * La fecha va delante porque así la pregunta que de verdad se hace —«¿qué
+ * falló ayer?»— se responde listando un prefijo, sin descargar nada.
+ */
+export function rutaDiagnostico(ahora: Date = new Date()): string {
+  const hora = ahora.toISOString().slice(11, 19).replace(/:/g, '');
+  return `${PREFIJO_DIAGNOSTICO}${fechaColombia(ahora)}/${hora}-${sufijoAleatorio()}.json`;
+}
+
 export interface RespuestaDiagnostico {
   estado: number;
   /** La línea que se escribió, o null si no se escribió ninguna. */
   linea: string | null;
+  /**
+   * Ruta del aviso en el Blob, o null si no se guardó (sin Blob configurado, o
+   * porque la escritura falló). Ver `atenderDiagnostico`.
+   */
+  guardado?: string | null;
   veredicto?: Veredicto;
 }
 
@@ -127,7 +166,34 @@ export async function atenderDiagnostico(
     return { estado: 204, linea: null, veredicto };
   }
 
-  const linea = `[empleos/diagnostico] ${JSON.stringify(sanearDiagnostico(bruto))}`;
+  const aviso = sanearDiagnostico(bruto);
+  const linea = `[empleos/diagnostico] ${JSON.stringify(aviso)}`;
   console.warn(linea);
-  return { estado: 204, linea, veredicto };
+
+  /*
+   * Y ADEMÁS AL BLOB, porque el registro de Vercel no sirve para esto.
+   *
+   * El plan Hobby retiene los registros de ejecución alrededor de UNA HORA:
+   * `vercel logs --since 24h` ya responde «outside the available retention».
+   * Un candidato cuenta que no pudo postular al día siguiente, o el lunes, y
+   * para entonces la línea de `console.warn` se borró. Esa es la razón por la
+   * que este fallo se persiguió tres veces a ciegas, así que el aviso se
+   * escribe donde sobrevive.
+   *
+   * NUNCA ESTORBA: si no hay Blob configurado, o si la escritura falla, el
+   * `console.warn` de arriba ya salió y la respuesta sigue siendo 204. Un
+   * diagnóstico que rompiera la página que está enseñando un fallo sería peor
+   * que no tener diagnóstico.
+   */
+  if (!blobConfigurado(env)) return { estado: 204, linea, guardado: null, veredicto };
+  // Se calcula UNA vez: lleva hora y sufijo al azar, así que llamarla dos
+  // veces daría dos rutas distintas y la devuelta no sería la escrita.
+  const destino = rutaDiagnostico();
+  try {
+    await almacen.guardarJson(destino, { ...aviso, cuando: new Date().toISOString() }, env);
+    return { estado: 204, linea, guardado: destino, veredicto };
+  } catch (fallo) {
+    console.warn('[empleos/diagnostico] no se pudo guardar el aviso:', fallo);
+    return { estado: 204, linea, guardado: null, veredicto };
+  }
 }
