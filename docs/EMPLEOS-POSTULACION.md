@@ -358,6 +358,30 @@ campo rechazando los archivos de más de 3 MB, un `E-GRANDE` significa que algo
 se saltó esa comprobación, y por eso tiene código propio en vez de quedar
 escondido detrás de un mensaje genérico.
 
+### El último recurso lleva lo que la persona ya escribió
+
+Todos los mensajes de error acaban igual: «mándanos tu hoja de vida por
+WhatsApp». Pero el saludo era **fijo** —«no pude enviar mi hoja de vida, ¿me
+ayudan?»— y tiraba a la basura el nombre, el cargo, el municipio y el teléfono
+que el candidato acababa de escribir y que estaban ahí al lado. Quien ya había
+fallado una vez tenía que volver a contarlo todo por chat, y Talento Humano
+recibía un archivo suelto sin saber a qué vacante iba. El `data-whatsapp-empleo`
+del HTML existía justo para esto y nunca se había conectado al script.
+
+Ahora, al enseñar cualquier error, el enlace se rearma con vacante, nombre,
+municipio, teléfono, correo y el **código del error**, que es lo que permite
+cruzar ese chat con el aviso del testigo. La hoja de vida es lo único que no
+puede viajar: la adjunta la persona en el chat.
+
+No sale ningún dato hacia nosotros ni hacia terceros: el texto se arma **en el
+navegador** y va al propio WhatsApp de la persona, que lo ve antes de mandarlo.
+El enlace original se guarda en `dataset.base` la primera vez, para que dos
+errores seguidos no acumulen datos uno sobre otro.
+
+Es la última red de todas, y la única que sigue en pie cuando han fallado el
+envío, los reintentos y el respaldo: a partir de aquí el candidato **ya no se
+queda por fuera**, aunque tenga que terminar por chat.
+
 ## Seguridad
 
 - **Campo trampa.** Un `<input name="sitio-web">` fuera de la pantalla, fuera del

@@ -572,6 +572,9 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       return;
     }
 
+    /** El enlace de «mándanos tu hoja de vida por WhatsApp» del aviso de error. */
+    const enlaceUltimoRecurso = form.querySelector<HTMLAnchorElement>('[data-whatsapp-empleo]');
+
     const claveTurnstile = form.dataset.turnstileKey ?? '';
 
     /** Intentos del POST: el primero y dos reintentos. Ver `enviarInsistiendo`. */
@@ -1048,6 +1051,51 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
 
     // --- Mensajes -----------------------------------------------------------
 
+    /**
+     * Mete en el enlace de WhatsApp lo que la persona YA escribió.
+     *
+     * POR QUÉ. Todos los mensajes de error acaban igual: «mándanos tu hoja de
+     * vida por WhatsApp». Pero el saludo era fijo —«no pude enviar mi hoja de
+     * vida, ¿me ayudan?»— y tiraba a la basura el nombre, el cargo, el
+     * municipio y el teléfono que la persona acababa de escribir, que estaban
+     * ahí al lado. Así, quien ya había fallado una vez tenía que volver a
+     * contarlo todo por chat, y Talento Humano recibía un archivo suelto sin
+     * saber a qué vacante iba. El `data-whatsapp-empleo` del HTML existía para
+     * esto y nunca se había conectado.
+     *
+     * ES LA ÚLTIMA RED: cuando esto se usa, el envío ya falló. Lo único que no
+     * puede viajar es la hoja de vida, que la adjunta la persona en el chat.
+     *
+     * NO SALE NADA HACIA NOSOTROS NI HACIA TERCEROS: el texto se arma en el
+     * navegador y va al propio WhatsApp de la persona, que lo ve y decide si lo
+     * manda. El código del error va al final para poder cruzarlo con el
+     * diagnóstico (src/lib/empleos/diagnostico.ts).
+     */
+    function personalizarUltimoRecurso(codigo: string) {
+      if (!enlaceUltimoRecurso) return;
+      const base = enlaceUltimoRecurso.dataset.base ?? enlaceUltimoRecurso.href;
+      // Se guarda el enlace original la primera vez: si no, cada error iría
+      // añadiendo datos sobre los del error anterior.
+      enlaceUltimoRecurso.dataset.base = base;
+
+      const cargo = valorDe('cargo');
+      const lineas = [
+        'Hola, intenté postularme desde la página de Distribuciones Santiago de Tunja y no pude enviar mi hoja de vida. ¿Me ayudan?',
+        '',
+        cargo ? `Vacante: ${cargo}` : '',
+        valorDe('nombre') ? `Nombre: ${valorDe('nombre')}` : '',
+        valorDe('municipio') ? `Municipio: ${valorDe('municipio')}` : '',
+        valorDe('telefono') ? `Teléfono: ${valorDe('telefono')}` : '',
+        valorDe('correo') ? `Correo: ${valorDe('correo')}` : '',
+        '',
+        'Adjunto mi hoja de vida en este chat.',
+        codigo ? `(Código del error: ${codigo})` : '',
+      ].filter((linea, indice, todas) => linea !== '' || todas[indice - 1] !== '');
+
+      const [sinTexto] = base.split('?');
+      enlaceUltimoRecurso.href = `${sinTexto}?text=${encodeURIComponent(lineas.join('\n'))}`;
+    }
+
     function mostrarErrores(mensajes: string[], codigo = '') {
       listaErrores!.textContent = '';
       for (const mensaje of mensajes) {
@@ -1066,6 +1114,9 @@ const jsonVacantes = JSON.stringify(datosPorVacante).replace(/</g, '\\u003c');
       // foco salta a ella: quien navega con lector de pantalla o teclado sabe
       // qué falló sin tener que buscarlo.
       if (mensajes.length > 0) {
+        // El último recurso se personaliza con lo ya escrito: quien llegó hasta
+        // aquí no tiene que volver a contarlo todo por chat.
+        personalizarUltimoRecurso(codigo);
         boton?.setAttribute('aria-describedby', 'errores-empleo');
         cajaErrores!.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         cajaErrores!.focus({ preventScroll: true });

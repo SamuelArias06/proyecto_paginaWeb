@@ -1147,6 +1147,25 @@ async function revisarEnvio(navegador, archivos, etiqueta, viewport) {
       `${etiqueta} · ${caso}: WhatsApp queda a la vista como último recurso`,
       await pagina.locator('[data-whatsapp-empleo]').isVisible(),
     );
+    /*
+     * Y LLEVA LO QUE LA PERSONA YA ESCRIBIÓ. El saludo era fijo y tiraba el
+     * nombre, el cargo, el municipio y el teléfono que estaban ahí al lado, así
+     * que quien ya había fallado una vez tenía que volver a contarlo todo por
+     * chat y Talento Humano recibía un archivo suelto sin saber a qué vacante
+     * iba. El código del error va también, para cruzarlo con el diagnóstico.
+     */
+    const recurso = decodeURIComponent(
+      (await pagina.locator('[data-whatsapp-empleo]').getAttribute('href')) ?? '',
+    );
+    comprobar(
+      `${etiqueta} · ${caso}: el WhatsApp lleva el cargo, el nombre y el contacto ya escritos`,
+      recurso.includes('Vendedor TAT') &&
+        recurso.includes('Cristian Amaya') &&
+        recurso.includes('Tunja') &&
+        recurso.includes('3106232429') &&
+        recurso.includes(codigo),
+      recurso.slice(recurso.indexOf('?')),
+    );
     comprobar(
       `${etiqueta} · ${caso}: el formulario sigue ahí, con los datos escritos`,
       (await pagina.locator('[data-form-empleo]').isVisible()) &&
