@@ -168,7 +168,9 @@ export const vacantes: Vacante[] = [
   {
     slug: 'vendedor-tat',
     cargo: 'Vendedor TAT',
-    ciudad: 'Tunja, Boyacá',
+    // La convocatoria está abierta en las tres zonas a la vez; el texto sale
+    // tal cual en la tarjeta de /empleos/ y en la página de la vacante.
+    ciudad: 'Tunja, Chiquinquirá y Barbosa',
     tipo: 'Tiempo completo',
     resumen: 'Atiende la ruta de tiendas asignada y toma el pedido en el punto de venta.',
     imagen: '/img/empleos/perfil-de-ventas.jpeg',
