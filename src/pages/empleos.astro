@@ -8,6 +8,7 @@ import { imagenOMarcador } from '../lib/imagenes';
 import { contactoEmpleo } from '../data/vacantes';
 import { cargarVacantes, urlVacantes } from '../lib/empleos/vacantes-fuente';
 import { atributosFlyer } from '../lib/empleos/flyer.mjs';
+import { textoUbicacion } from '../lib/empleos/zonas';
 
 /**
  * Las vacantes las publica Talento Humano en Control360 (C360_VACANTES_URL); si
@@ -108,7 +109,7 @@ const proceso = [
 
                 <div class="flex flex-1 flex-col p-7">
                   <p class="m-0 text-[12.5px] font-semibold tracking-[0.08em] text-accent-text uppercase">
-                    {vacante.ciudad} · {vacante.tipo}
+                    {textoUbicacion(vacante)} · {vacante.tipo}
                   </p>
                   <h3 class="mt-2 mb-0 text-lg">
                     <a class="inline-flex min-h-11 items-center hover:text-secondary-dark" href={ruta(`/empleos/${vacante.slug}/`)}>

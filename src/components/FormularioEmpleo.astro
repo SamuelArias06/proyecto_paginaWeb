@@ -70,6 +70,7 @@ import { AUTORIZACION_PARRAFOS } from '../lib/empleos/autorizacion';
 import { ACEPTA_HOJA_DE_VIDA, AYUDA_HOJA_DE_VIDA } from '../lib/empleos/hoja-de-vida';
 import { MUNICIPIO_MAX, MUNICIPIO_MIN } from '../lib/empleos/ubicacion';
 import { cargarVacantes } from '../lib/empleos/vacantes-fuente';
+import { textoUbicacion } from '../lib/empleos/zonas';
 import { ruta } from '../lib/rutas';
 import Icono from './Icono.astro';
 import LoaderDST from './LoaderDST.astro';
@@ -99,7 +100,7 @@ const repetidos = new Set(vacantes.map((v) => v.cargo).filter((c, i, xs) => xs.i
 const opciones = vacantes.map((v) => ({
   cargo: v.cargo,
   slug: v.slug,
-  texto: repetidos.has(v.cargo) && v.ciudad ? `${v.cargo} — ${v.ciudad}` : v.cargo,
+  texto: repetidos.has(v.cargo) && v.ciudad ? `${v.cargo} — ${textoUbicacion(v)}` : v.cargo,
 }));
 
 // Por vacante (slug): su sede y sus preguntas de filtro (las del cargo y las

@@ -37,12 +37,19 @@
  * mostrar), la `jornada`, lo que ofrece la empresa, las habilidades deseables
  * y el WhatsApp extra. Lo que venga de Control360 manda; SOLO lo que falte se
  * hereda de `src/data/vacantes.ts` cuando el `slug` coincide con una de la
- * lista estática. Así la lista estática es respaldo puro: el día que todas las
+ * lista estática.
+ *
+ * LAS ZONAS SON LA EXCEPCIÓN QUE CONFIRMA LA REGLA. Control360 guarda UNA sede
+ * por vacante, así que una convocatoria abierta en varios municipios no cabe en
+ * su modelo y las `zonas` viven solo aquí (empleos/zonas.ts). Se heredan
+ * mientras la sede que manda Control360 sea una de ellas; si la vacante se mudó
+ * a otro municipio, las zonas se descartan y manda Control360, como siempre. Así la lista estática es respaldo puro: el día que todas las
  * vacantes tengan su flyer en Control360, aquí no queda nada que mantener.
  */
 import { vacantes as vacantesEstaticas, type Vacante } from '../../data/vacantes';
 import type { Entorno } from '../pqrs/config';
 import { leerPreguntas } from './preguntas';
+import { sedeEntreZonas } from './zonas';
 
 /** Variable de entorno con la URL pública de Control360. */
 export const VARIABLE_URL = 'C360_VACANTES_URL';
@@ -135,6 +142,15 @@ export function leerVacantesRemotas(
     // Lo que Control360 trae manda; lo que no trae se hereda de la lista
     // estática (mismo slug), y si tampoco está ahí, simplemente no se pinta.
     const imagen = urlImagen(o.imagen) || base?.imagen || '';
+    // Las zonas: de Control360 el día que las mande y, mientras tanto, de la
+    // lista estática, pero solo si su sede sigue siendo una de ellas.
+    const ciudad = texto(o.ciudad);
+    const zonasPropias = textos(o.zonas);
+    const zonas = zonasPropias.length
+      ? zonasPropias
+      : base?.zonas && sedeEntreZonas(ciudad, base.zonas)
+        ? [...base.zonas]
+        : [];
     const habilidades = textos(o.habilidades);
     const ofrecemos = textos(o.ofrecemos);
     const whatsappExtra = whatsappDesdeDigitos(o.whatsappExtra) ?? (base?.whatsappExtra ? { ...base.whatsappExtra } : null);
@@ -150,7 +166,8 @@ export function leerVacantesRemotas(
     salida.push({
       slug,
       cargo,
-      ciudad: texto(o.ciudad),
+      ciudad,
+      ...(zonas.length ? { zonas } : {}),
       tipo: texto(o.tipo),
       resumen: texto(o.resumen),
       imagen,

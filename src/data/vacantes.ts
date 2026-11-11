@@ -29,7 +29,21 @@ export interface Vacante {
   /** Identificador para la URL: /empleos/<slug>/ */
   slug: string;
   cargo: string;
+  /**
+   * La sede de la vacante ("Tunja, Boyacá"), tal como la guarda Control360.
+   * Es lo que compara la pregunta automática de traslado (empleos/ubicacion.ts),
+   * así que NO se le agregan municipios: para eso está `zonas`.
+   */
   ciudad: string;
+  /**
+   * Municipios donde está abierta la MISMA convocatoria, cuando son varios
+   * ("Vendedor TAT" en Tunja, Chiquinquirá y Barbosa). Control360 solo guarda
+   * una sede por vacante, así que esto se mantiene aquí y se hereda cuando la
+   * sede que manda Control360 es una de estas (empleos/zonas.ts).
+   *
+   * Con una sola zona —o sin el campo— se sigue viendo `ciudad` tal cual.
+   */
+  zonas?: string[];
   tipo: string;
   /** Frase corta para la tarjeta del listado. */
   resumen: string;
@@ -168,9 +182,8 @@ export const vacantes: Vacante[] = [
   {
     slug: 'vendedor-tat',
     cargo: 'Vendedor TAT',
-    // La convocatoria está abierta en las tres zonas a la vez; el texto sale
-    // tal cual en la tarjeta de /empleos/ y en la página de la vacante.
-    ciudad: 'Tunja, Chiquinquirá y Barbosa',
+    ciudad: 'Tunja, Boyacá',
+    zonas: ['Tunja, Boyacá', 'Chiquinquirá, Boyacá', 'Barbosa, Santander'],
     tipo: 'Tiempo completo',
     resumen: 'Atiende la ruta de tiendas asignada y toma el pedido en el punto de venta.',
     imagen: '/img/empleos/perfil-de-ventas.jpeg',

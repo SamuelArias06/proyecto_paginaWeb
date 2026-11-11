@@ -94,6 +94,36 @@ describe('jobPosting', () => {
     });
   });
 
+  it('con varias zonas emite una ubicación por municipio', () => {
+    const j = jobPosting({ ...base, zonas: ['Tunja, Boyacá', 'Chiquinquirá, Boyacá', 'Barbosa, Santander'] }, OPCIONES)!;
+    expect(Array.isArray(j.jobLocation)).toBe(true);
+    expect(j.jobLocation).toEqual([
+      {
+        '@type': 'Place',
+        address: {
+          '@type': 'PostalAddress',
+          streetAddress: 'Cra 2 Este #58-79',
+          addressLocality: 'Tunja',
+          addressRegion: 'Boyacá',
+          addressCountry: 'CO',
+        },
+      },
+      {
+        '@type': 'Place',
+        address: { '@type': 'PostalAddress', addressLocality: 'Chiquinquirá', addressRegion: 'Boyacá', addressCountry: 'CO' },
+      },
+      {
+        '@type': 'Place',
+        address: { '@type': 'PostalAddress', addressLocality: 'Barbosa', addressRegion: 'Santander', addressCountry: 'CO' },
+      },
+    ]);
+  });
+
+  it('con una sola zona sigue siendo un lugar, no una lista', () => {
+    const j = jobPosting({ ...base, zonas: ['Tunja, Boyacá'] }, OPCIONES)!;
+    expect(Array.isArray(j.jobLocation)).toBe(false);
+  });
+
   it('no emite nada para "buscamos-vehiculos"', () => {
     const vehiculos = estaticas.find((v) => v.slug === 'buscamos-vehiculos')!;
     expect(vehiculos).toBeDefined();

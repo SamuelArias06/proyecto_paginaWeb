@@ -72,7 +72,7 @@ export function hoyEnColombia(ahora: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(ahora);
 }
 
-/** Lugar de trabajo: la sede si es Tunja; si no, la ciudad y el departamento de la vacante. */
+/** Un lugar de trabajo: la sede si es Tunja; si no, la ciudad y el departamento. */
 function lugar(ciudad: string) {
   const [municipio = '', departamento = ''] = ciudad.split(',').map((s) => s.trim());
   if (!municipio || /^tunja$/i.test(municipio)) return { '@type': 'Place', address: direccionSede() };
@@ -85,6 +85,18 @@ function lugar(ciudad: string) {
       addressCountry: 'CO',
     },
   };
+}
+
+/**
+ * Dónde se trabaja: la sede, o una entrada por municipio cuando la convocatoria
+ * está abierta en varios (`zonas`). Google admite `jobLocation` como lista y es
+ * la única forma de que la vacante salga en las búsquedas de las tres ciudades.
+ */
+function lugares(v: Vacante) {
+  const zonas = (v.zonas ?? []).map((z) => z.trim()).filter(Boolean);
+  const unicas = [...new Set(zonas)];
+  if (unicas.length < 2) return lugar(v.ciudad);
+  return unicas.map(lugar);
 }
 
 /**
@@ -115,7 +127,7 @@ export function jobPosting(
       sameAs: 'https://dstunja.com',
       logo: opciones.logo,
     },
-    jobLocation: lugar(v.ciudad),
+    jobLocation: lugares(v),
     url: opciones.url,
     directApply: false,
   };

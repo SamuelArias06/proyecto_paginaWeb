@@ -138,6 +138,46 @@ describe('leerVacantesRemotas', () => {
     expect(v).not.toHaveProperty('jornada');
   });
 
+  it('hereda las zonas de la lista estática mientras la sede de Control360 sea una de ellas', () => {
+    const conZonas = [{ ...ESTATICA, zonas: ['Tunja, Boyacá', 'Chiquinquirá, Boyacá', 'Barbosa, Santander'] }];
+    const r = leerVacantesRemotas(
+      { version: 1, vacantes: [{ slug: 'vendedor-tat', cargo: 'Vendedor TAT', ciudad: 'Chiquinquirá, Boyacá' }] },
+      conZonas,
+    );
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r.vacantes[0].ciudad).toBe('Chiquinquirá, Boyacá');
+    expect(r.vacantes[0].zonas).toEqual(['Tunja, Boyacá', 'Chiquinquirá, Boyacá', 'Barbosa, Santander']);
+  });
+
+  it('si Control360 mudó la vacante a otro municipio, las zonas viejas se descartan', () => {
+    const conZonas = [{ ...ESTATICA, zonas: ['Tunja, Boyacá', 'Chiquinquirá, Boyacá'] }];
+    // REMOTO trae esta misma vacante en Duitama.
+    const r = leerVacantesRemotas(REMOTO, conZonas);
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r.vacantes[0].ciudad).toBe('Duitama, Boyacá');
+    expect(r.vacantes[0]).not.toHaveProperty('zonas');
+  });
+
+  it('las zonas de Control360 mandan el día que las mande', () => {
+    const conZonas = [{ ...ESTATICA, zonas: ['Tunja, Boyacá'] }];
+    const r = leerVacantesRemotas(
+      {
+        version: 1,
+        vacantes: [{ slug: 'vendedor-tat', cargo: 'Vendedor TAT', ciudad: 'Tunja, Boyacá', zonas: ['Tunja', 'Sogamoso'] }],
+      },
+      conZonas,
+    );
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r.vacantes[0].zonas).toEqual(['Tunja', 'Sogamoso']);
+  });
+
+  it('una vacante sin zonas en ningún lado no estrena el campo', () => {
+    const r = leerVacantesRemotas(REMOTO, ESTATICAS);
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r.vacantes[0]).not.toHaveProperty('zonas');
+    expect(r.vacantes[1]).not.toHaveProperty('zonas');
+  });
+
   it('una imagen que no es URL absoluta no se usa (la página no puede buscarla en public/ por ese nombre)', () => {
     const r = leerVacantesRemotas(
       { version: 1, vacantes: [{ slug: 'nueva', cargo: 'Nueva', imagen: '../../etc/passwd' }, { slug: 'otra', cargo: 'Otra', imagen: 'x/y.jpg' }] },

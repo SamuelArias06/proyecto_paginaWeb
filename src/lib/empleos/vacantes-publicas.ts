@@ -27,6 +27,7 @@ export const CAMPOS_PUBLICOS = [
   'slug',
   'cargo',
   'ciudad',
+  'zonas',
   'tipo',
   'resumen',
   'descripcion',
@@ -37,7 +38,13 @@ export const CAMPOS_PUBLICOS = [
 export interface VacantePublica {
   slug: string;
   cargo: string;
+  /** La sede de la vacante. */
   ciudad: string;
+  /**
+   * Los demás municipios donde está abierta la misma convocatoria, con la sede
+   * incluida. Siempre arreglo: vacío cuando la vacante tiene una sola sede.
+   */
+  zonas: string[];
   tipo: string;
   resumen: string;
   descripcion: string[];
@@ -57,6 +64,7 @@ export function vacantePublica(v: Vacante): VacantePublica {
     slug: v.slug,
     cargo: v.cargo,
     ciudad: v.ciudad,
+    zonas: v.zonas ? [...v.zonas] : [],
     tipo: v.tipo,
     resumen: v.resumen,
     descripcion: [...v.descripcion],

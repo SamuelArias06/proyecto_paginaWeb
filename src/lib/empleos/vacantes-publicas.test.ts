@@ -14,6 +14,7 @@ const COMPLETA: Vacante = {
   slug: 'prueba',
   cargo: 'Cargo de prueba',
   ciudad: 'Tunja, Boyacá',
+  zonas: ['Tunja, Boyacá', 'Barbosa, Santander'],
   tipo: 'Tiempo completo',
   resumen: 'Resumen.',
   imagen: '/img/empleos/prueba.jpeg',
@@ -28,6 +29,12 @@ const COMPLETA: Vacante = {
 describe('vacantePublica', () => {
   it('deja exactamente los campos permitidos', () => {
     expect(Object.keys(vacantePublica(COMPLETA)).sort()).toEqual([...CAMPOS_PUBLICOS].sort());
+  });
+
+  it('publica las zonas, y [] cuando la vacante tiene una sola sede', () => {
+    expect(vacantePublica(COMPLETA).zonas).toEqual(['Tunja, Boyacá', 'Barbosa, Santander']);
+    const { zonas: _sinZonas, ...sinZonas } = COMPLETA;
+    expect(vacantePublica(sinZonas).zonas).toEqual([]);
   });
 
   it('usa [] cuando la vacante no tiene funciones', () => {

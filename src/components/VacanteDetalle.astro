@@ -7,6 +7,7 @@ import { atributosFlyer } from '../lib/empleos/flyer.mjs';
 import { jobPosting } from '../lib/empleos/job-posting';
 import { jsonLd, listaMigas } from '../lib/datos-estructurados';
 import { contactoEmpleo, type Vacante } from '../data/vacantes';
+import { textoUbicacion } from '../lib/empleos/zonas';
 
 /**
  * El detalle de una vacante abierta: /empleos/<slug>/ (lo arma
@@ -94,7 +95,7 @@ const ogFlyer = esMarcador ? undefined : new URL(imagenOriginal, sitio).href;
       <p class="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-[14.5px] text-muted">
         <span class="inline-flex items-center gap-2">
           <Icono nombre="map-pin" class="h-4 w-4" interactivo={false} />
-          {vacante.ciudad}
+          {textoUbicacion(vacante)}
         </span>
         <span class="inline-flex items-center gap-2">
           <Icono nombre="briefcase" class="h-4 w-4" interactivo={false} />
@@ -299,7 +300,7 @@ const ogFlyer = esMarcador ? undefined : new URL(imagenOriginal, sitio).href;
               .map((otra) => (
                 <a class="group glass-card block p-7" href={ruta(`/empleos/${otra.slug}/`)}>
                   <p class="m-0 text-[12.5px] font-semibold tracking-[0.08em] text-accent-text uppercase">
-                    {otra.ciudad}
+                    {textoUbicacion(otra)}
                   </p>
                   <h3 class="mt-2 mb-0 text-lg group-hover:text-secondary-dark">{otra.cargo}</h3>
                   <p class="mt-3 mb-0 text-[14.5px] text-muted">{otra.resumen}</p>
