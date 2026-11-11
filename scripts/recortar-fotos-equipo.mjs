@@ -148,15 +148,18 @@ const RECORTES = [
     eje: 576,
   },
   {
-    // Erika Abril — Talento Humano. Es la que tiene más pelo por encima de los
-    // ojos, así que es la más justa arriba (~7,8 % de aire a 58 %). La cara
-    // está algo girada: la nariz cae en 510 y el contorno se centra en 497.
-    original: 'erica-abril.jpeg',
-    salida: 'erica-abril.webp',
-    coronilla: 308,
-    menton: 600,
-    ojos: 470,
-    eje: 503,
+    // Nikole Correal — Talento Humano. Entró en noviembre de 2026 en lugar de
+    // Erika Abril, cuya fila se retiró con su foto. Tampoco viene a 960x1280:
+    // son 899x1599, así que sus medidas están en la escala de ESA foto. Lleva
+    // gafas, y la línea de los ojos es la de las pupilas detrás del cristal,
+    // no la del armazón. La cara está algo girada hacia su derecha: las
+    // pupilas se centran en 388 y el contorno del mentón en 390.
+    original: 'nikole-correal.jpeg',
+    salida: 'nikole-correal.webp',
+    coronilla: 484,
+    menton: 832,
+    ojos: 652,
+    eje: 390,
   },
   {
     // Julián Mejía — Líder Logístico.

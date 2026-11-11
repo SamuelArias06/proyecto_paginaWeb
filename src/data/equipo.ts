@@ -6,7 +6,7 @@
  *
  * FOTOS
  * -----
- * Cada foto se nombra por la PERSONA, no por el cargo ('erica-abril.webp' y no
+ * Cada foto se nombra por la PERSONA, no por el cargo ('nikole-correal.webp' y no
  * 'talento-humano.webp'): los cargos se renombran cada tanto y arrastraban con
  * ellos el nombre del archivo.
  *
@@ -61,9 +61,9 @@ export const equipo: Persona[] = [
     frase: '',
   },
   {
-    nombre: 'Erika Abril',
+    nombre: 'Nikole Correal',
     cargo: 'Talento Humano',
-    foto: '/img/equipo/erica-abril.webp',
+    foto: '/img/equipo/nikole-correal.webp',
     frase: '',
   },
   {
