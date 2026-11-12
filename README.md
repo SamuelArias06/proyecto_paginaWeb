@@ -493,6 +493,215 @@ que la página no pide nada a Google ni muestra franja de cookies. Con
 `--url https://dstunja.com` revisa además producción: cabeceras, redirección de
 `http://` a `https://` y bloqueos en el navegador.
 
+## Cómo funciona el pedido
+
+El sitio **no tiene carrito de verdad ni pasarela de pago**. El armador de
+pedidos sirve para que el tendero escriba una lista y se la entregue a un asesor
+por WhatsApp, que es el canal que la empresa ya usa. Todo ocurre en el
+navegador: no hay servidor que reciba el pedido ni base de datos donde quede.
+
+### El recorrido completo
+
+1. **La página.** `src/pages/pedido.astro` monta dos piezas:
+   `CatalogoPedido.astro` (buscador, filtros y grilla de tarjetas) y
+   `PanelPedido.astro` (la lista del pedido, la barra del carrito y el
+   formulario de envío). Las dos viven en `src/components/pedido/`.
+2. **El catálogo llega en dos tiempos.** En el build, `CatalogoPedido.astro`
+   imprime como HTML real las secciones de marcas y las primeras 24 tarjetas
+   (`TAMANO_TANDA`, en `src/data/pedido.ts`), y además emite el catálogo entero
+   en un `<script type="application/json" id="datos-catalogo">`. Al arrancar, el
+   script del cliente lee ese JSON y lo guarda en memoria con
+   `registrarProductos()` (`src/lib/carrito.ts`), pero **no repinta** lo que ya
+   está en pantalla: solo le aplica el pedido guardado. Se repinta cuando el
+   visitante busca, filtra, abre otra marca o pide «Ver más».
+3. **Agregar.** El clic en `[data-agregar]` de una tarjeta llama a
+   `sumarCantidad(pedido, id, cantidad)` y luego a `guardarPedido(pedido)`, las
+   dos de `carrito.ts`. La tarjeta vuelve a cantidad 1 para que agregar dos
+   veces no repita sin querer el número anterior.
+4. **El aviso.** `guardarPedido()` escribe en localStorage y dispara el evento
+   `dst:pedido` sobre `document`. Quien escucha vuelve a leer: el panel repinta
+   su lista, la barra fija del carrito actualiza las unidades y el contador de
+   la píldora «Arma tu pedido» de `Header.astro` se mueve **en todas las
+   páginas**, no solo en `/pedido/`. Por eso el estado no vive en una variable
+   compartida: Astro empaqueta por separado el script de cada componente.
+5. **Abrir el panel.** El botón de la barra fija abre el cajón (en escritorio
+   entra por la derecha; en móvil sube desde abajo). La píldora del header lleva
+   `data-abrir-pedido` solo en `/pedido/`, donde abre el panel en vez de
+   recargar. Es un diálogo modal de verdad: atrapa el Tab, cierra con Escape o
+   tocando el velo y devuelve el foco a donde estaba.
+6. **Dos pasos.** El panel abre siempre en la lista (paso 1). Los campos del
+   negocio (paso 2) solo aparecen al pulsar «Enviar pedido por WhatsApp» con al
+   menos una referencia. Cerrar el panel o vaciar el pedido devuelve al paso 1.
+7. **Enviar.** Al hacer submit, `validar()` comprueba que haya productos, que
+   los campos obligatorios estén llenos y que el teléfono tenga 10 dígitos. Si
+   pasa, `mensajeParaUrl(pedido)` (en `carrito.ts`) arma el texto,
+   `enlacePedido(texto)` (`src/lib/whatsapp-pedido.ts`) lo codifica dentro de la
+   URL de `wa.me` y `window.open` abre WhatsApp en otra pestaña. **El pedido no
+   se vacía al enviarlo**: lo normal es que el cliente ajuste cantidades y mande
+   una corrección. Para eso está «Vaciar pedido», que pide confirmación.
+
+### Dónde vive el estado del carrito
+
+En **localStorage**, bajo una sola clave: `dst:pedido:v1` (`CLAVE_PEDIDO`, en
+`src/data/pedido.ts`). Ahí van juntas las referencias con su cantidad *y* los
+datos del negocio. Esa es la fuente de verdad; las variables `pedido` de cada
+componente son copias que se refrescan con el evento.
+
+- **Si recarga la página**, el pedido sigue ahí: el script lo vuelve a leer con
+  `leerPedido()` y repinta la barra, el panel y el contador. Lo único que se
+  reconstruye es el catálogo en memoria, que sale otra vez del JSON de la
+  página.
+- **Si vuelve al día siguiente**, también sigue, con los datos del negocio ya
+  escritos en el formulario (`pintarCliente()`). No hay ningún código de
+  caducidad: el pedido dura hasta que el visitante lo vacíe o borre los datos
+  del navegador.
+- **Si el navegador bloquea el almacenamiento** (modo privado de algunos
+  navegadores, almacenamiento deshabilitado), `leerPedido()` devuelve un pedido
+  vacío y `guardarPedido()` se traga el error: la página funciona igual, pero el
+  pedido solo dura lo que dure la pestaña abierta.
+- **Entre pestañas** del mismo sitio se sincroniza con el evento `storage` del
+  navegador (`alCambiarPedido()`).
+
+Se guardan **ids y cantidades, no nombres ni precios**: el texto del mensaje se
+resuelve en el momento contra el catálogo en memoria.
+
+### Cómo se arma el mensaje de WhatsApp
+
+**El número** sale de `WHATSAPP_PEDIDO` y `TELEFONO_PEDIDO`, en
+`src/lib/whatsapp-pedido.ts`. Es uno solo para todo el sitio (botón flotante,
+CTA del inicio, Contáctanos, pie, armador de pedidos). Hoy coincide dígito por
+dígito con `empresa.telefono` / `empresa.whatsapp` de `src/data/site.ts`, pero
+está escrito aparte a propósito: si vuelve a haber una línea comercial propia se
+cambia aquí sin tocar el número general.
+
+**El formato** lo arma `mensajePedido()` en `carrito.ts`: encabezado con el
+negocio, el municipio, el contacto y el teléfono; un título con cuántas
+referencias y cuántas unidades; una línea por referencia del tipo
+`2 × Saltín Noel Tradicional (300 g) — cód. 1046509 — ref. $ 5.200`; el
+subtotal; y el aviso de precios (`AVISO_PRECIOS`). `mensajeParaUrl()` le
+antepone el saludo «Hola, te envío mi pedido.» —solo ahí, porque
+`mensajePedido()` es también el texto del botón «Copiar pedido», donde el saludo
+sobraría—.
+
+**Si falta un dato**, nada se rompe: cada línea del encabezado se omite si viene
+vacía; una referencia sin código va sin `— cód.`; una sin precio sugerido va sin
+`— ref. $`; y una que ya no esté en el catálogo sale como
+`N × (referencia <id>)`. La línea de subtotal **desaparece entera** si ninguna
+referencia tiene precio confirmado (un «subtotal: $ 0» confunde más de lo que
+ayuda), y se rotula como *parcial*, diciendo de cuántas sale, si solo algunas lo
+tienen.
+
+**Si el pedido está vacío**, no se llega a enviar: la barra del carrito ni se
+dibuja, `irADatos()` no abre el paso 2, `validar()` lo rechaza con un aviso y
+«Copiar pedido» se ignora.
+
+**Si el pedido es muy largo**, el texto ya codificado se corta en
+`LIMITE_TEXTO_URL` (4000 caracteres, en `src/data/pedido.ts`).
+`mensajeParaUrl()` busca por **bisección** cuántas líneas caben, envía esas con
+un aviso de cuántas faltan dentro del propio mensaje, y copia el pedido completo
+al portapapeles para pegarlo como segundo mensaje.
+
+**Sin JavaScript** el buscador, los filtros y el carrito se ocultan por CSS
+(regla `html:not([data-js])`), y un bloque `<noscript>` deja a la vista las
+marcas, las primeras tarjetas y un enlace al WhatsApp genérico.
+
+### Qué hace `scripts/verificar-pedido.mjs`
+
+Es una prueba de extremo a extremo con Playwright **sobre el sitio ya
+compilado**: levanta `dist/client/` en el puerto 4399 bajo el prefijo
+`/proyecto_paginaWeb` y recorre `/pedido/` en móvil (375 px) y escritorio
+(1280 px). Los enlaces a `wa.me` se interceptan, así que no sale tráfico a
+internet.
+
+Se ejecuta **a mano**, después de compilar:
+
+```bash
+npm run build
+npm run verificar:pedido
+```
+
+**No corre en CI**: `.github/workflows/ci.yml` solo hace `npm test`,
+`astro check` y `npm run build`.
+
+Comprueba que con el pedido vacío no se vean la barra, el pie del panel ni los
+campos del negocio; que al agregar aparezca la barra con «N unidades · Ver
+pedido» y que el número suba; que «Ver pedido» abra el panel (con
+`aria-expanded` y el foco dentro) y que Escape y el velo lo cierren; que los
+campos del negocio solo salgan en el paso 2 y que un teléfono de 5 dígitos se
+rechace sin abrir ninguna pestaña de WhatsApp; que el pedido sobreviva a una
+recarga en la clave `dst:pedido:v1`; y que el contador del buscador diga
+«X de N referencias». Aparte, rastrea los archivos compilados para que no quede
+publicado ningún número retirado, que todos los enlaces `wa.me` vayan a un
+número vigente y que el enlace del `<noscript>` de `/pedido/` también apunte al
+de pedidos.
+
+### Decisiones que no son obvias leyendo el código
+
+- **El catálogo se imprime y además viaja en JSON.** Las primeras tarjetas salen
+  del build para que la página sirva antes de que llegue el script (o si nunca
+  llega); el resto se pinta en el navegador porque imprimir las seiscientas y
+  pico referencias serían más de medio mega de marcado. Las dos etapas usan las
+  mismas plantillas (`src/lib/plantillasCatalogo.ts`), y por eso el script puede
+  *adoptar* la grilla en vez de repintarla, sin parpadeo.
+- **El número de WhatsApp está repetido a propósito en tres sitios**
+  (`site.ts`, `whatsapp-pedido.ts` y, a mano, `verificar-pedido.mjs`). La copia
+  del script es la que delata un cambio hecho por error, así que un cambio de
+  línea se ajusta en los tres **en el mismo commit**.
+- **`window.open` se llama dentro del propio clic**, antes de copiar al
+  portapapeles: si se esperara a que la copia terminara, el navegador bloquearía
+  la ventana por emergente. Por lo mismo tampoco se abren varias ventanas de
+  `wa.me` seguidas para los pedidos largos.
+- **Los datos del negocio se guardan con `guardarPedido(pedido, false)`**, sin
+  avisar al resto de la página: repintar la lista en cada tecla movería el
+  cursor de sitio.
+- **Hay dos precios y no se tratan igual.** El PSP (precio sugerido al público)
+  se multiplica por la cantidad y entra en el subtotal; el precio de lista de
+  SAP es por unidad de venta, así que se pinta tal cual y **no** se suma ni se
+  multiplica. Nunca viajan los dos juntos.
+- **Un código SAP incompleto no se muestra.** `detalleReferencia()` omite el
+  código cuando viene marcado como parcial: publicar medio código invita a pedir
+  una referencia que no existe. Hoy no queda ninguna así, pero la comprobación
+  se mantiene porque el maestro se regenera desde el deck.
+- **El teléfono se valida contando dígitos**, no por formato: «310 623 2429» con
+  espacios es válido, y un `+57` delante se descuenta antes de contar.
+- **La clave de localStorage lleva sufijo de versión** (`:v1`) para poder
+  cambiar el formato del pedido más adelante.
+- **El puerto 4399** del script de verificación está elegido lejos del 4321 de
+  `astro dev` (y de los 4322, 4323… que toma cuando ese está ocupado), porque un
+  choque ahí no daría error: el navegador acabaría en el servidor de desarrollo
+  y las comprobaciones fallarían sin que la página tuviera nada.
+
+Lo que **no** tiene razón escrita en el código, y conviene no suponerla:
+
+- Por qué `TAMANO_TANDA` son 24 tarjetas y no otra cifra — *sin verificar*.
+- Por qué el aviso de precios del mensaje (`AVISO_PRECIOS`, en `pedido.ts`) y la
+  nota del pie del panel (`NOTA_PRECIOS`, en `PanelPedido.astro`) son dos frases
+  distintas en vez de una sola — *sin verificar*.
+- Por qué el aviso del pedido recortado se pinta con el tono `'error'` aunque el
+  envío haya salido bien — *sin verificar*.
+
+### Lo que está a medias o es frágil
+
+- **Toda la red de seguridad del pedido es un script manual.** No hay pruebas
+  unitarias de `carrito.ts` ni de `whatsapp-pedido.ts` (los `src/lib/*.test.ts`
+  cubren otras cosas), y `verificar:pedido` no está en CI. Si nadie lo corre
+  después de compilar, un cambio en el armador llega a producción sin revisar.
+- **El límite de 4000 caracteres es una estimación, no una medida.** `wa.me` no
+  documenta ningún tope; el valor se eligió conservador y el propio comentario
+  invita a ajustarlo si se ve que aguanta más o que algún teléfono falla.
+- **El portapapeles puede fallar** en el caso del pedido recortado. Hay mensaje
+  alternativo («usa Copiar pedido y pega el resto»), pero si la copia no sale,
+  las referencias que faltan quedan solo en pantalla.
+- **Los ids guardados pueden quedar huérfanos.** Si una referencia se da de baja
+  del catálogo, quien la tuviera en su pedido seguirá viéndola como un id crudo
+  y el mensaje dirá `(referencia <id>)`. No hay limpieza ni migración.
+- **La clave está versionada, pero no hay código de migración.** Subirla a `:v2`
+  haría que los pedidos guardados desaparecieran sin aviso.
+- **Hay comentarios desactualizados.** Varios hablan de «709 referencias» cuando
+  `src/data/productos.ts` tiene 621, y la cabecera de `src/data/pedido.ts`
+  todavía dice «GitHub Pages hoy, Hostinger después», cuando el único destino es
+  Vercel. No afecta al comportamiento, pero despista al leer.
+
 ## Formularios
 
 El de **contacto** arma un correo con los datos y lo abre en el gestor de quien
