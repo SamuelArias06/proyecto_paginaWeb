@@ -67,9 +67,9 @@ export const equipo: Persona[] = [
     frase: '',
   },
   {
-    nombre: 'Julián Mejía',
+    nombre: 'Catalina Aparicio',
     cargo: 'Líder Logístico',
-    foto: '/img/equipo/julian-mejia.webp',
+    foto: '/img/equipo/catalina-aparicio.webp',
     frase: '',
   },
 ];
