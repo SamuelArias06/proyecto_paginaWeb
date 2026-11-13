@@ -162,13 +162,19 @@ const RECORTES = [
     eje: 390,
   },
   {
-    // Julián Mejía — Líder Logístico.
-    original: 'julian-mejia.jpg',
-    salida: 'julian-mejia.webp',
-    coronilla: 182,
-    menton: 447,
-    ojos: 315,
-    eje: 503,
+    // Catalina Aparicio — Líder Logístico. Entró en noviembre de 2026 en lugar
+    // de Julián Mejía, cuya fila se retiró con su foto. Es la foto más grande
+    // que ha llegado —3120x4160, cámara trasera en vez de selfie—, así que sus
+    // medidas están en la escala de ESA foto y son del orden de tres veces las
+    // de las demás filas. Lleva gafas: la línea de los ojos es la de las
+    // pupilas detrás del cristal. La coronilla se midió sobre la masa del pelo
+    // y no sobre los pelos sueltos, que suben unos 30 px más.
+    original: 'catalina-aparicio.jpeg',
+    salida: 'catalina-aparicio.webp',
+    coronilla: 870,
+    menton: 1830,
+    ojos: 1380,
+    eje: 1512,
   },
 ];
 
